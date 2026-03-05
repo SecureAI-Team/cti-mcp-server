@@ -146,21 +146,32 @@ fastmcp dev src/server.py
 - **故障恢复**：内建进程监控、崩溃自动重启与内存日志轮转限制 (Log Rotation)。
 
 ```bash
-# 启动生产级集群 (后台运行)
+# 1. 确认 .env 中的 MCP_AUTH_TOKEN 已设置
+# 2. 确认 nginx/nginx.conf 中的 map 块已填入相同的 Token
+# 3. 启动生产级集群
 docker-compose -f docker-compose.prod.yml up -d --build
-
-# 持续跟进运行日志
-docker-compose -f docker-compose.prod.yml logs -f
 ```
-*(MCP Server 将通过 Nginx 暴露在宿主机的 `80` 端口上，服务网关级调用，可按需自行修改配置文件添加 HTTPS 支持)*
+*(MCP Server 将通过 Nginx 暴露在宿主机的 `80` 端口上。外部 AI Agent 调用时，必须在 HTTP Header 中加入 `Authorization: Bearer <Your-Token>`，否则将收到 401 错误)*
 
 ---
 
 ## 🔧 接入方式
 
-### Claude Desktop
+### Claude Desktop (本地模式)
+本地直接通过 Python 启动，无需 API Key 验证（绑定 localhost 安全）。
+... (保持原样)
 
-编辑 `%APPDATA%\Claude\claude_desktop_config.json`：
+### 企业级 Agent (HTTP 模式)
+
+调用生产环境接口时，请确保客户端已注入 Token：
+
+```python
+import httpx
+
+# 示例：通过 HTTP 直接调用
+headers = {"Authorization": "Bearer your-secret-mcp-token"}
+# ... 按照 MCP SSE 协议进行交互
+```
 
 ```json
 {
@@ -219,7 +230,8 @@ async with streamablehttp_client("http://localhost:8080/mcp") as (read, write, _
 | **熔断器** | 3 次连续失败后快速失败，60s 后自动试探恢复 |
 | **错误脱敏** | API Key 和本地路径不会出现在错误响应中 |
 | **审计日志** | `logs/audit.jsonl` 记录每次工具调用（不含 IOC 原始值）|
-| **HTTP 认证** | 可配置 Bearer Token，默认绑定 127.0.0.1 |
+| **HTTP 认证** | **必须项**。生产环境由 Nginx 强制校验 `Authorization: Bearer <token>`，拒绝非法请求。|
+| **HTTP 隐藏** | Nginx 关闭 server_tokens，隐藏后端技术栈信息。|
 
 ### 性能特性
 
