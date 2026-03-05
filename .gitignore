@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+# Environments
+.env
+.venv/
+venv/
+env/
+ENV/
+
+# Pytest and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+tests/reports/
+
+# Cache and logs for CTI server
+.mitre_cache/
+logs/
+
+# Build and dist
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Output files
+scenario_output.txt
+test_output.txt
+
+# Editor/OS
+.vscode/
+.idea/
+.DS_Store

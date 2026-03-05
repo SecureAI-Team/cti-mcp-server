@@ -1,0 +1,16 @@
+.git
+.github
+__pycache__
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+.env
+.pytest_cache/
+tests/
+test_output.txt
+scenario_output.txt
+.mitre_cache/
+logs/
+cti_mcp_server.egg-info/
