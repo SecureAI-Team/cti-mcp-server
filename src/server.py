@@ -652,7 +652,7 @@ async def resource_status() -> str:
     )
 
     lines = [
-        f"# CTI MCP Server Status",
+        "# CTI MCP Server Status",
         f"**Server**: {status.server_name} v{status.version}",
         f"**Cache**: {cache_stats['current_size']}/{cache_stats['max_size']} entries, TTL={cache_stats['ttl_seconds']}s",
         "",

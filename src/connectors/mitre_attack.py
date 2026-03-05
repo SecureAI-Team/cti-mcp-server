@@ -8,7 +8,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from ..cache import cached
 from ..models import MitreTactic, MitreTechnique
 
 logger = logging.getLogger(__name__)

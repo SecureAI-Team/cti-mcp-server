@@ -70,7 +70,7 @@ class ScenarioRunner:
                 return
 
             if expect_error and "error" not in result:
-                print(_red(f"  ✗ FAILED — Expected error but got success"))
+                print(_red("  ✗ FAILED — Expected error but got success"))
                 self.failed += 1
                 self.results.append({"name": name, "status": "FAILED", "error": "expected error not raised"})
                 return
@@ -121,7 +121,7 @@ class ScenarioRunner:
 async def run_it_security_scenarios(runner: ScenarioRunner) -> None:
     """IT 安全运营场景"""
     from src.server import (
-        lookup_ioc, get_threat_summary, lookup_cve, search_cves,
+        lookup_ioc, lookup_cve, search_cves,
         get_mitre_technique, search_mitre_techniques,
     )
 

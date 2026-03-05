@@ -6,7 +6,6 @@ Outputs newline-delimited JSON (JSONL) to logs/audit.jsonl.
 
 import json
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Any

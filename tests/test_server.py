@@ -4,16 +4,15 @@ Covers: validators, rate limiter, circuit breaker, ICS tools, and existing tools
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from src.models import IOCType, VTDetection, OTXContext, IOCResult
+from src.models import IOCType, VTDetection, IOCResult
 from src.validators import (
     ValidationError,
     validate_ip,
     validate_domain,
     validate_hash,
     validate_url,
-    validate_ioc,
     validate_cve_id,
     validate_technique_id,
     sanitize_error,
@@ -195,7 +194,7 @@ class TestCircuitBreaker:
 
     @pytest.mark.asyncio
     async def test_open_state_rejects_fast(self):
-        from src.circuit_breaker import CircuitBreaker, CBState
+        from src.circuit_breaker import CircuitBreaker
         cb = CircuitBreaker("test", failure_threshold=1, recovery_timeout=999)
         failing = AsyncMock(side_effect=Exception("fail"))
         with pytest.raises(Exception):

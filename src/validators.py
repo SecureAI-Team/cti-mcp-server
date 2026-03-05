@@ -6,8 +6,6 @@ All Tool parameters pass through here before reaching connectors.
 import ipaddress
 import re
 import urllib.parse
-from typing import Literal
-
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 MAX_STRING_LEN = 2048

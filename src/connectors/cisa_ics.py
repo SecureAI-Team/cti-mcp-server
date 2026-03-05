@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any
 
 import httpx
+from pydantic import BaseModel, Field
 
 from ..cache import cached
 from ..config import config
@@ -28,9 +29,6 @@ OT_VENDORS = {
     "delta", "panasonic", "b&r", "codesys", "pilz", "sick",
     "endress", "hauser", "ifm", "pepperl", "festo",
 }
-
-
-from pydantic import BaseModel, Field
 
 
 class ICSAdvisory(BaseModel):
