@@ -20,6 +20,7 @@ from .connectors.cve import CVEConnector
 from .connectors.mitre_atlas import MitreAtlasConnector, OWASP_LLM_TOP10, AI_FRAMEWORK_CVE_MAP
 from .connectors.mitre_attack import MitreAttackConnector
 from .connectors.mitre_ics import MitreICSConnector
+from .connectors.mac_oui import MacOUIConnector
 from .connectors.otx import OTXConnector
 from .connectors.threat_intel import ThreatIntelConnector
 from .connectors.virustotal import VirusTotalConnector
@@ -64,6 +65,7 @@ _atlas = MitreAtlasConnector()
 _cve = CVEConnector()
 _cisa = CISAICSConnector()
 _intel = ThreatIntelConnector()
+_mac = MacOUIConnector()
 
 
 # ── Startup warmup (background thread) ───────────────────────────────────────
@@ -653,6 +655,20 @@ async def lookup_ot_asset_cves(
         }
 
 
+@mcp.tool()
+async def lookup_mac_vendor(
+    mac_address: Annotated[str, Field(description="MAC address to look up (e.g. '00:1A:2B:3C:4D:5E' or '00-1A-2B-3C-4D-5E')")],
+) -> dict:
+    """
+    Look up the hardware manufacturer (vendor) for a given MAC address.
+    Useful for fingerprinting unknown devices in OT/ICS or IT networks.
+    """
+    with AuditTimer("lookup_mac_vendor") as t:
+        result = await _mac.lookup_mac(mac_address)
+        t.finish(result_count=1 if result.get("found") else 0)
+        return result
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # TOOLS — OTX
 # ══════════════════════════════════════════════════════════════════════════════
@@ -747,6 +763,8 @@ async def resource_status() -> str:
                          description="CISA ICS Advisories — OT/ICS security bulletins"),
         DataSourceStatus(name="epss-kev", enabled=True,
                          description="EPSS & CISA KEV — Active exploit prediction and tracking"),
+        DataSourceStatus(name="mac-oui", enabled=_mac.enabled,
+                         description="IEEE MAC OUI — OT/IT hardware fingerprinting"),
     ]
     status = ServiceStatus(
         server_name=config.MCP_SERVER_NAME,

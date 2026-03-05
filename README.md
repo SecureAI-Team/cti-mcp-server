@@ -17,8 +17,10 @@
 
 | Tool | 功能描述 |
 |---|---|
-| `lookup_cve` | 查询单个 CVE 详情：CVSS 评分、CWE、描述、受影响产品列表 |
+| `lookup_cve` | 查询单个 CVE 详情：CVSS 评分、CWE、受影响产品（会自动关联 CISA KEV 与 EPSS 预测）|
 | `search_cves` | 按关键词+严重度搜索 CVE，支持分页 |
+| `get_epss_score` | 查询 CVE 的利用概率预测分数 (EPSS) |
+| `is_cve_known_exploited`| 判定漏洞是否已录入 CISA KEV 真实在野利用库 |
 
 ### ⚔️ MITRE ATT&CK Enterprise（无需 API Key）
 
@@ -26,6 +28,7 @@
 |---|---|
 | `get_mitre_technique` | 获取 IT 攻击技术详情（T1059 等），含战术、平台、检测方法 |
 | `search_mitre_techniques` | 全文检索 ATT&CK Enterprise 技术库 |
+| `search_threat_actors` | 检索 APT 黑客组织（如 Sandworm、Lazarus），做归因分析 |
 
 ### 🏭 ICS/OT 工业安全（无需 API Key）
 
@@ -36,6 +39,7 @@
 | `get_mitre_ics_technique` | MITRE ATT&CK for ICS 技术详情（T0855 等 OT 专属技术）|
 | `search_mitre_ics_techniques` | 检索 ATT&CK for ICS 技术库（含 Modbus/DNP3 相关技术）|
 | `lookup_ot_asset_cves` | 按 OT 厂商/产品搜索 CVE（Siemens、Rockwell、Honeywell 等 15 家）|
+| `lookup_mac_vendor` | 基于 IEEE OUI 库对 MAC 地址实现快速厂商指纹识别（OT/IT 皆可）|
 
 ### 🤖 AI/LLM/Agent 安全（无需 API Key）
 
@@ -161,7 +165,9 @@ async with streamablehttp_client("http://localhost:8080/mcp") as (read, write, _
 | VirusTotal v3 | IOC 声誉 | ✅ 必须 | 4 次/分 (免费) | [链接](https://www.virustotal.com/gui/join-us) |
 | AlienVault OTX | 威胁脉冲 | ✅ 必须 | 免费无限制 | [链接](https://otx.alienvault.com/api) |
 | NIST NVD CVE | 漏洞库 | ⬜ 可选 | 免费，有 Key 更快 | [链接](https://nvd.nist.gov/developers/request-an-api-key) |
-| MITRE ATT&CK | TTP 企业版 | ❌ 无需 | 本地 STIX，离线 | 自动下载 |
+| CISA KEV & EPSS | 漏洞实战情报 | ❌ 无需 | 在线查询 | 无需申请 |
+| IEEE MAC OUI | 硬件 MAC 指纹 | ❌ 无需 | 离线查表 | 自动下载 |
+| MITRE ATT&CK | TTP 及 APT 组织 | ❌ 无需 | 本地 STIX，离线 | 自动下载 |
 | MITRE ATT&CK for ICS | OT/SCADA TTP | ❌ 无需 | 本地 STIX，离线 | 自动下载 |
 | MITRE ATLAS | AI/ML 威胁矩阵 | ❌ 无需 | 本地 YAML，离线 | 自动下载 |
 | CISA ICS Advisories | OT 安全公告 | ❌ 无需 | RSS，在线 | 无需申请 |
