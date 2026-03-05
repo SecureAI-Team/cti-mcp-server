@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  cti-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cti-mcp-prod
+    restart: always # Robust restart policy for production
+    expose:
+      - "8000"
+    environment:
+      - MCP_HTTP_HOST=0.0.0.0
+      - MCP_HTTP_PORT=8000
+      - MCP_SERVER_NAME=CTI-Server
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-} # Strongly recommended to set this in prod
+      # Integrations (API keys loaded via .env)
+      - OTX_API_KEY=${OTX_API_KEY:-}
+      - VT_API_KEY=${VT_API_KEY:-}
+    volumes:
+      - mitre_cache:/app/.mitre_cache
+      - ./logs:/app/logs
+    # Defense-in-depth: limit what the container can do internally
+    security_opt:
+      - no-new-privileges:true
+    # Soft resource limits (tune these based on your server capacity)
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # Nginx Reverse Proxy for streaming/SSE resilience and traffic management
+  nginx:
+    image: nginx:alpine
+    container_name: cti-mcp-gateway
+    restart: always
+    ports:
+      - "80:80"
+      # - "443:443" # Uncomment when configuring SSL certificates
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - cti-mcp
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+volumes:
+  mitre_cache:

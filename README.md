@@ -117,7 +117,7 @@ VT_RATE_LIMIT=4     # VT 免费版 4次/分钟
 OTX_RATE_LIMIT=60
 ```
 
-### 3. 启动服务
+### 3. 启动服务 (本地开发)
 
 **STDIO 模式**（接入 Claude Desktop / 本地 Agent）：
 ```bash
@@ -127,7 +127,7 @@ python -m src.server
 **HTTP 模式**（多 Agent 并发）：
 ```bash
 python -m src.server --transport=http
-# 监听 127.0.0.1:8080（默认安全配置）
+# 监听 127.0.0.1:8000（默认）
 ```
 
 **调试模式**（MCP Inspector UI）：
@@ -135,6 +135,24 @@ python -m src.server --transport=http
 fastmcp dev src/server.py
 # 浏览器打开 http://localhost:5173
 ```
+
+### 4. 生产环境部署 (高并发/Docker+Nginx)
+
+对于生产级多 Agent 接入场景，由于 FastMCP 的 HTTP 传输依赖于细粒度的数据流 (SSE/Server-Sent Events) 和持久连接，推荐使用内置的 Nginx 优化模式来防止缓冲区超时或连接断开。
+
+内置的 `docker-compose.prod.yml` 提供以下生产级特性：
+- **安全加固**：Docker 容器以非 root (`appuser`) 全局降权运行，设置读写隔离。
+- **SSE 防拥塞**：Nginx 已在 `nginx/nginx.conf` 中专门配置了 `proxy_buffering off;` 及长连接保持。
+- **故障恢复**：内建进程监控、崩溃自动重启与内存日志轮转限制 (Log Rotation)。
+
+```bash
+# 启动生产级集群 (后台运行)
+docker-compose -f docker-compose.prod.yml up -d --build
+
+# 持续跟进运行日志
+docker-compose -f docker-compose.prod.yml logs -f
+```
+*(MCP Server 将通过 Nginx 暴露在宿主机的 `80` 端口上，服务网关级调用，可按需自行修改配置文件添加 HTTPS 支持)*
 
 ---
 
