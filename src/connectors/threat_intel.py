@@ -3,7 +3,6 @@ Connector for obtaining CISA Known Exploited Vulnerabilities (KEV) catalog and E
 """
 
 import logging
-from typing import Any
 
 import httpx
 from pydantic import BaseModel
