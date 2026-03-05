@@ -21,14 +21,16 @@
 | `search_cves` | 按关键词+严重度搜索 CVE，支持分页 |
 | `get_epss_score` | 查询 CVE 的利用概率预测分数 (EPSS) |
 | `is_cve_known_exploited`| 判定漏洞是否已录入 CISA KEV 真实在野利用库 |
+| `lookup_osv_package` | 精准查询 OSV 开源漏洞库 (SBOM 供应链安全/npm/PyPI/Maven 等) |
 
-### ⚔️ MITRE ATT&CK Enterprise（无需 API Key）
+### ⚔️ MITRE ATT&CK Enterprise & D3FEND（无需 API Key）
 
 | Tool | 功能描述 |
 |---|---|
 | `get_mitre_technique` | 获取 IT 攻击技术详情（T1059 等），含战术、平台、检测方法 |
 | `search_mitre_techniques` | 全文检索 ATT&CK Enterprise 技术库 |
 | `search_threat_actors` | 检索 APT 黑客组织（如 Sandworm、Lazarus），做归因分析 |
+| `get_mitre_d3fend_countermeasures` | 查询特定攻击技术的 D3FEND 专属防御与应对策略 |
 
 ### 🏭 ICS/OT 工业安全（无需 API Key）
 
@@ -57,6 +59,14 @@
 |---|---|
 | `get_otx_pulse` | 获取 AlienVault OTX 威胁脉冲详情（含 IOC 列表）|
 | `search_otx_pulses` | 按关键词搜索 OTX 威胁脉冲 |
+
+### 💬 特色 Prompts（指导 AI 工作流）
+
+本服务内置原生 MCP Prompts，引导大模型按标准流程进行深度安全研判：
+| Prompt Name | 场景描述 |
+|---|---|
+| `analyze_threat_actor` | 指导 AI 分析某一黑客组织的攻击特征、关联技术，并提出针对性地防御措施 |
+| `investigate_asset_supply_chain`| 提供供应链风险分析模板：结合 CVE 与 OSV 查询给特定资产定级 |
 
 ---
 
@@ -165,9 +175,11 @@ async with streamablehttp_client("http://localhost:8080/mcp") as (read, write, _
 | VirusTotal v3 | IOC 声誉 | ✅ 必须 | 4 次/分 (免费) | [链接](https://www.virustotal.com/gui/join-us) |
 | AlienVault OTX | 威胁脉冲 | ✅ 必须 | 免费无限制 | [链接](https://otx.alienvault.com/api) |
 | NIST NVD CVE | 漏洞库 | ⬜ 可选 | 免费，有 Key 更快 | [链接](https://nvd.nist.gov/developers/request-an-api-key) |
+| OSV Database | 软件供应链安全 | ❌ 无需 | 免费 | 在线开源 API |
 | CISA KEV & EPSS | 漏洞实战情报 | ❌ 无需 | 在线查询 | 无需申请 |
 | IEEE MAC OUI | 硬件 MAC 指纹 | ❌ 无需 | 离线查表 | 自动下载 |
 | MITRE ATT&CK | TTP 及 APT 组织 | ❌ 无需 | 本地 STIX，离线 | 自动下载 |
+| MITRE D3FEND | 针对性防御措施 | ❌ 无需 | 在线查询 | 无需申请 |
 | MITRE ATT&CK for ICS | OT/SCADA TTP | ❌ 无需 | 本地 STIX，离线 | 自动下载 |
 | MITRE ATLAS | AI/ML 威胁矩阵 | ❌ 无需 | 本地 YAML，离线 | 自动下载 |
 | CISA ICS Advisories | OT 安全公告 | ❌ 无需 | RSS，在线 | 无需申请 |

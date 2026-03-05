@@ -9,6 +9,7 @@ import threading
 from typing import Annotated
 
 from fastmcp import FastMCP
+from mcp.types import PromptMessage, TextContent
 from pydantic import Field
 
 from .audit import AuditTimer, audit_tool_call
@@ -21,6 +22,8 @@ from .connectors.mitre_atlas import MitreAtlasConnector, OWASP_LLM_TOP10, AI_FRA
 from .connectors.mitre_attack import MitreAttackConnector
 from .connectors.mitre_ics import MitreICSConnector
 from .connectors.mac_oui import MacOUIConnector
+from .connectors.mitre_d3fend import MitreD3fendConnector
+from .connectors.osv import OSVConnector
 from .connectors.otx import OTXConnector
 from .connectors.threat_intel import ThreatIntelConnector
 from .connectors.virustotal import VirusTotalConnector
@@ -66,6 +69,8 @@ _cve = CVEConnector()
 _cisa = CISAICSConnector()
 _intel = ThreatIntelConnector()
 _mac = MacOUIConnector()
+_osv = OSVConnector()
+_d3fend = MitreD3fendConnector()
 
 
 # ── Startup warmup (background thread) ───────────────────────────────────────
@@ -342,6 +347,29 @@ async def search_cves(
         }
 
 
+@mcp.tool()
+async def lookup_osv_package(
+    package: Annotated[str, Field(description="Name of the software package (e.g. 'log4j-core', 'requests')")],
+    ecosystem: Annotated[str | None, Field(description="Optional ecosystem (e.g. 'PyPI', 'npm', 'Maven', 'Go')")] = None,
+    version: Annotated[str | None, Field(description="Optional specific version version check (e.g. '1.0.0')")] = None,
+) -> dict:
+    """
+    Look up vulnerabilities for a given open-source software component/package utilizing the OSV database.
+    This is extremely useful for Supply Chain Security (SCS) and SBOM vulnerability analysis.
+    """
+    with AuditTimer("lookup_osv_package") as t:
+        try:
+            package = validate_query_string(package, "package")
+            if ecosystem:
+                ecosystem = validate_query_string(ecosystem, "ecosystem")
+        except ValidationError as exc:
+            return {"error": str(exc)}
+
+        result = await _osv.query_package(package_name=package, ecosystem=ecosystem, version=version)
+        t.finish(result_count=result.get("vulnerability_count", 0))
+        return result
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # TOOLS — MITRE ATT&CK (Enterprise)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -397,6 +425,25 @@ async def search_mitre_techniques(
             for t in results
         ],
     }
+
+
+@mcp.tool()
+async def get_mitre_d3fend_countermeasures(
+    technique_id: Annotated[str, Field(description="ATT&CK Technique ID (e.g., 'T1059') to find defenses for.")],
+) -> dict:
+    """
+    Query the MITRE D3FEND knowledge base for defensive countermeasures tailored against a specific ATT&CK technique.
+    This tells the security teams EXACTLY what mechanisms they should deploy to defend against the technique.
+    """
+    with AuditTimer("get_mitre_d3fend_countermeasures") as t:
+        try:
+            technique_id = validate_technique_id(technique_id)
+        except ValidationError as exc:
+            return {"error": str(exc)}
+
+        result = await _d3fend.get_defenses_for_technique(technique_id)
+        t.finish(result_count=result.get("defenses_count", 0))
+        return result
 
 
 @mcp.tool()
@@ -765,6 +812,10 @@ async def resource_status() -> str:
                          description="EPSS & CISA KEV — Active exploit prediction and tracking"),
         DataSourceStatus(name="mac-oui", enabled=_mac.enabled,
                          description="IEEE MAC OUI — OT/IT hardware fingerprinting"),
+        DataSourceStatus(name="osv", enabled=_osv.enabled,
+                         description="OSV Database — Software supply chain vulnerabilities"),
+        DataSourceStatus(name="d3fend", enabled=_d3fend.enabled,
+                         description="MITRE D3FEND — Defensive mechanisms & countermeasures"),
     ]
     status = ServiceStatus(
         server_name=config.MCP_SERVER_NAME,
@@ -1207,7 +1258,58 @@ async def resource_ai_frameworks() -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ENTRYPOINT
+# PROMPTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.prompt()
+async def analyze_threat_actor(
+    actor_name: Annotated[str, Field(description="Name of the threat actor or APT group (e.g. Lazarus, Sandworm)")]
+) -> list[PromptMessage]:
+    """
+    Template for deeply analyzing a threat actor.
+    Instructs the LLM to query MITRE for the actor, gather their known techniques, and map out defenses.
+    """
+    prompt_text = (
+        f"I need a comprehensive threat profile for the actor known as '{actor_name}'.\n\n"
+        f"Please follow these steps:\n"
+        f"1. Use `search_threat_actors` to find their exact group ID and aliases.\n"
+        f"2. Summarize their typical targets, motivations, and associated malware.\n"
+        f"3. Highlight their most common ATT&CK techniques.\n"
+        f"4. For their key techniques, use `get_mitre_d3fend_countermeasures` to suggest 3-5 prioritized defensive actions we must take immediately."
+    )
+    return [
+        PromptMessage(
+            role="user",
+            content=TextContent(type="text", text=prompt_text)
+        )
+    ]
+
+
+@mcp.prompt()
+async def investigate_asset_supply_chain(
+    asset_name: Annotated[str, Field(description="Name of the software or system components (e.g. apache_tomcat, log4j-core)")]
+) -> list[PromptMessage]:
+    """
+    Template for supply chain security analysis on a specific IT/OT/AI asset or package.
+    """
+    prompt_text = (
+        f"We are auditing our usage of the asset/package '{asset_name}'.\n\n"
+        f"Please perform a supply chain security check:\n"
+        f"1. Use `search_cves` to find general high/critical IT or OT vulnerabilities.\n"
+        f"2. Use `lookup_osv_package` to check the OSV open-source ecosystem database for specific package exploits.\n"
+        f"3. For the most critical CVE found (if any), use `is_cve_known_exploited` and `get_epss_score` to determine if we are facing active threat in the wild.\n"
+        f"4. Output a clear risk matrix and upgrade recommendation."
+    )
+    return [
+        PromptMessage(
+            role="user",
+            content=TextContent(type="text", text=prompt_text)
+        )
+    ]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SERVER ENTRYPOINT
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
