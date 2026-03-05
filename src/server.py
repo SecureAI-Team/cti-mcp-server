@@ -21,6 +21,7 @@ from .connectors.mitre_atlas import MitreAtlasConnector, OWASP_LLM_TOP10, AI_FRA
 from .connectors.mitre_attack import MitreAttackConnector
 from .connectors.mitre_ics import MitreICSConnector
 from .connectors.otx import OTXConnector
+from .connectors.threat_intel import ThreatIntelConnector
 from .connectors.virustotal import VirusTotalConnector
 from .models import (
     DataSourceStatus,
@@ -62,6 +63,7 @@ _mitre_ics = MitreICSConnector()
 _atlas = MitreAtlasConnector()
 _cve = CVEConnector()
 _cisa = CISAICSConnector()
+_intel = ThreatIntelConnector()
 
 
 # ── Startup warmup (background thread) ───────────────────────────────────────
@@ -224,8 +226,77 @@ async def lookup_cve(
         if not result:
             t.finish(error="not_found")
             return {"error": f"CVE '{cve_id}' not found in NVD database."}
+            
+        data = result.model_dump(mode="json")
+        
+        # Concurrently enrich with EPSS and KEV if available
+        async def enrich():
+            epss_result, kev_data = await asyncio.gather(
+                _intel.get_epss(cve_id),
+                _intel.get_cisa_kev()
+            )
+            if epss_result:
+                data["epss"] = epss_result.model_dump(mode="json")
+            if kev_data and cve_id in kev_data:
+                data["cisa_kev"] = kev_data[cve_id].model_dump(mode="json")
+        
+        await enrich()
+
+        t.finish(result_count=1)
+        return data
+
+
+@mcp.tool()
+async def get_epss_score(
+    cve_id: Annotated[str, Field(description="CVE ID to look up EPSS score for (e.g. CVE-2021-44228)")],
+) -> dict:
+    """
+    Get the Exploit Prediction Scoring System (EPSS) score for a CVE.
+    EPSS estimates the probability of a vulnerability being exploited in the wild.
+    """
+    with AuditTimer("get_epss_score") as t:
+        try:
+            cve_id = validate_cve_id(cve_id)
+        except ValidationError as exc:
+            return {"error": str(exc)}
+
+        result = await _intel.get_epss(cve_id)
+        if not result:
+            t.finish(error="not_found")
+            return {"error": f"EPSS score not found for '{cve_id}'."}
+        
         t.finish(result_count=1)
         return result.model_dump(mode="json")
+
+
+@mcp.tool()
+async def is_cve_known_exploited(
+    cve_id: Annotated[str, Field(description="CVE ID to check against CISA KEV catalog")],
+) -> dict:
+    """
+    Check if a CVE is listed in the CISA Known Exploited Vulnerabilities (KEV) catalog.
+    Being in KEV means attackers are actively using this vulnerability in the wild.
+    """
+    with AuditTimer("is_cve_known_exploited") as t:
+        try:
+            cve_id = validate_cve_id(cve_id)
+        except ValidationError as exc:
+            return {"error": str(exc)}
+
+        kev_data = await _intel.get_cisa_kev()
+        if not kev_data:
+            return {"error": "Failed to fetch CISA KEV catalog."}
+            
+        if cve_id in kev_data:
+            t.finish(result_count=1, verdict="active_exploit")
+            return {
+                "cve_id": cve_id,
+                "is_known_exploited": True,
+                "kev_details": kev_data[cve_id].model_dump(mode="json")
+            }
+        
+        t.finish(result_count=0, verdict="not_in_kev")
+        return {"cve_id": cve_id, "is_known_exploited": False}
 
 
 @mcp.tool()
@@ -322,6 +393,36 @@ async def search_mitre_techniques(
                 "url": t.url,
             }
             for t in results
+        ],
+    }
+
+
+@mcp.tool()
+async def search_threat_actors(
+    query: Annotated[str, Field(description="Search term for threat actor / APT groups")],
+    limit: Annotated[int, Field(description="Max results (1-20)", ge=1, le=20)] = 10,
+) -> dict:
+    """
+    Search MITRE ATT&CK Enterprise threat actors (APT groups) by name or alias.
+    Useful for attributing behaviors to specific threat groups (e.g., 'Sandworm', 'Lazarus').
+    """
+    try:
+        query = validate_query_string(query)
+    except ValidationError as exc:
+        return {"error": str(exc)}
+
+    results = _mitre.search_groups(query, limit=limit)
+    return {
+        "count": len(results),
+        "groups": [
+            {
+                "id": g.id,
+                "name": g.name,
+                "aliases": g.aliases,
+                "description_snippet": g.description[:400] + "..." if len(g.description) > 400 else g.description,
+                "url": g.url,
+            }
+            for g in results
         ],
     }
 
@@ -644,6 +745,8 @@ async def resource_status() -> str:
                          description="MITRE ATLAS AI Threat Matrix — LLM/ML attack techniques"),
         DataSourceStatus(name="cisa-ics", enabled=True,
                          description="CISA ICS Advisories — OT/ICS security bulletins"),
+        DataSourceStatus(name="epss-kev", enabled=True,
+                         description="EPSS & CISA KEV — Active exploit prediction and tracking"),
     ]
     status = ServiceStatus(
         server_name=config.MCP_SERVER_NAME,

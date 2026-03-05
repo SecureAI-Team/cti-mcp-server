@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from ..models import MitreTactic, MitreTechnique
+from ..models import MitreTactic, MitreTechnique, MitreGroup
 
 logger = logging.getLogger(__name__)
 
@@ -158,4 +158,59 @@ class MitreAttackConnector:
             )
         except Exception as exc:
             logger.error("_parse_technique failed: %s", exc)
+            return None
+
+    def get_groups(self, limit: int = 50) -> list[MitreGroup]:
+        """Return all ATT&CK Enterprise threat actors (groups)."""
+        src = self._load()
+        if not src:
+            return []
+        try:
+            groups = src.get_groups(remove_revoked_deprecated=True)
+            return [self._parse_group(g) for g in groups[:limit] if g]
+        except Exception as exc:
+            logger.error("get_groups failed: %s", exc)
+            return []
+            
+    def search_groups(self, query: str, limit: int = 10) -> list[MitreGroup]:
+        """Search APT groups by name or alias."""
+        src = self._load()
+        if not src:
+            return []
+        query_lower = query.lower()
+        try:
+            groups = src.get_groups(remove_revoked_deprecated=True)
+            matches = []
+            for g in groups:
+                name = g.get("name", "").lower()
+                aliases = [a.lower() for a in g.get("aliases", [])]
+                desc = g.get("description", "").lower()
+                
+                if query_lower in name or any(query_lower in a for a in aliases) or query_lower in desc:
+                    parsed = self._parse_group(g)
+                    if parsed:
+                        matches.append(parsed)
+                if len(matches) >= limit:
+                    break
+            return matches
+        except Exception as exc:
+            logger.error("search_groups failed: %s", exc)
+            return []
+
+    def _parse_group(self, g: Any) -> MitreGroup | None:
+        try:
+            ext_refs = g.get("external_references", [])
+            attack_ref = next((r for r in ext_refs if r.get("source_name") == "mitre-attack"), {})
+            group_id = attack_ref.get("external_id", "")
+            url = attack_ref.get("url", "")
+            
+            return MitreGroup(
+                id=group_id,
+                name=g.get("name", ""),
+                description=g.get("description", ""),
+                aliases=g.get("aliases", []),
+                url=url
+            )
+        except Exception as exc:
+            logger.error("_parse_group failed: %s", exc)
             return None

@@ -187,6 +187,14 @@ class MitreTechnique(BaseModel):
     url: str = ""
     data_sources: list[str] = Field(default_factory=list)
 
+class MitreGroup(BaseModel):
+    """Represents a threat actor / APT group in MITRE ATT&CK."""
+    id: str
+    name: str
+    description: str
+    aliases: list[str] = Field(default_factory=list)
+    url: str = ""
+
 
 # ── OTX Pulse ─────────────────────────────────────────────────────────────────
 
