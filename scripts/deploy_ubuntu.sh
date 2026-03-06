@@ -17,15 +17,29 @@ REPO_URL="https://github.com/SecureAI-Team/cti-mcp-server.git"
 echo "[1/5] Installing system dependencies (Docker & Git)..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -yq
-apt-get install -yq git curl openssl ca-certificates xz-utils
+apt-get install -yq git curl openssl ca-certificates xz-utils ufw
 
 # Install Docker if not present
 if ! command -v docker &> /dev/null; then
-    echo "      Installing Docker Engine via apt..."
-    apt-get install -yq docker.io docker-compose-v2
-    systemctl enable --now docker
+    echo "      Installing Docker Engine (official script)..."
+    curl -fsSL https://get.docker.com -o get-docker.sh
+    sh get-docker.sh
+    rm get-docker.sh
 else
     echo "      Docker is already installed."
+fi
+
+# Ensure docker compose plugin is available
+if ! docker compose version &> /dev/null; then
+    echo "      Installing Docker Compose plugin..."
+    apt-get install -yq docker-compose-plugin || apt-get install -yq docker-compose-v2
+fi
+
+# Configure firewall (UFW) if active
+if command -v ufw &> /dev/null && ufw status | grep -qw "active"; then
+    echo "      Configuring UFW firewall to allow port 80 (HTTP)..."
+    ufw allow 80/tcp
+    # ufw allow 443/tcp # Uncomment when HTTPS is enabled
 fi
 
 echo "[2/5] Fetching repository to $INSTALL_DIR..."
