@@ -153,6 +153,13 @@ docker-compose -f docker-compose.prod.yml up -d --build
 ```
 *(MCP Server 将通过 Nginx 暴露在宿主机的 `80` 端口上。外部 AI Agent 调用时，必须在 HTTP Header 中加入 `Authorization: Bearer <Your-Token>`，否则将收到 401 错误)*
 
+#### 🛡️ 公网暴露最佳实践 (Public Internet Access)
+由于 MCP 协议传输涉及 API Token 的认证头，强烈建议在暴露到公网前配置以下安全网关层：
+1. **强制 HTTPS/TLS 加密**：修改 `docker-compose.prod.yml` 开放 443 端口并挂载证书，或在 Nginx 外层接 Cloudflare/Traefik 代理提供自动化 TLS。千万不要在非安全的 HTTP 信道传输 `Bearer Token`。
+2. **边缘 WAF (Web Application Firewall)**：对高威胁目标的服务端，配置 WAF 以过滤恶意的漏洞扫描器。
+3. **严格限流 (Rate Limiting)**：当前的 `nginx.conf` 中已按客户端 IP 设定了基础限流（10请求/s 防止 DDoS）。若有多租户代理池的大并发请求，请根据情况调整 `nginx.conf` 中的 `limit_req_zone` 阈值。
+4. **动态的 Token 管理**：目前 Nginx 采用的是静态 `map` 块鉴权。大规模生产化部署建议将认证下放至全职的 API 网关集成 JWT / OAuth2 校验。
+
 ---
 
 ## 🔧 接入方式
