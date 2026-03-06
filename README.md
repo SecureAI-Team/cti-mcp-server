@@ -136,9 +136,20 @@ fastmcp dev src/server.py
 # 浏览器打开 http://localhost:5173
 ```
 
-### 4. 生产环境部署 (高并发/Docker+Nginx)
+### 4. 生产环境部署 (Ubuntu 24.04 一键部署)
 
-对于生产级多 Agent 接入场景，由于 FastMCP 的 HTTP 传输依赖于细粒度的数据流 (SSE/Server-Sent Events) 和持久连接，推荐使用内置的 Nginx 优化模式来防止缓冲区超时或连接断开。
+我们为 Ubuntu Server 提供了一键自动化部署脚本。该脚本会自动为您安装 Docker、拉取代码、生成高强度且随机的访问 Token 并启动整个防拥塞架构：
+
+```bash
+curl -sSL https://raw.githubusercontent.com/SecureAI-Team/cti-mcp-server/main/scripts/deploy_ubuntu.sh | sudo bash
+```
+> *注：服务将默认部署在 `/opt/cti-mcp-server` 目录下。部署完成后控制台会打印出您的公网 IP 和访问 Token。*
+
+---
+
+### 5. 生产环境部署 (手动/Docker+Nginx)
+
+对于跨平台的生产级多 Agent 接入场景，由于 FastMCP 的 HTTP 传输依赖于细粒度的数据流 (SSE/Server-Sent Events) 和持久连接，推荐使用内置的 Nginx 优化模式来防止缓冲区超时或连接断开。
 
 内置的 `docker-compose.prod.yml` 提供以下生产级特性：
 - **安全加固**：Docker 容器以非 root (`appuser`) 全局降权运行，设置读写隔离。
