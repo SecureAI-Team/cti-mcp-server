@@ -23,6 +23,13 @@
 | `is_cve_known_exploited`| 判定漏洞是否已录入 CISA KEV 真实在野利用库 |
 | `lookup_osv_package` | 精准查询 OSV 开源漏洞库 (SBOM 供应链安全/npm/PyPI/Maven 等) |
 
+### 📢 厂商安全公告 Vendor Advisories（无需 API Key）
+
+| Tool | 功能描述 |
+|---|---|
+| `get_recent_vendor_advisories` | 获取 13 家主流 IT/OT/AI 厂商的最新安全公告（如 Microsoft MSRC, Cisco, Siemens） |
+| `search_vendor_advisories` | 按关键词或 CVE ID 跨厂商检索安全公告，支持按 `it`, `ot`, `ai` 分类过滤 |
+
 ### ⚔️ MITRE ATT&CK Enterprise & D3FEND（无需 API Key）
 
 | Tool | 功能描述 |
@@ -60,13 +67,20 @@
 | `get_otx_pulse` | 获取 AlienVault OTX 威胁脉冲详情（含 IOC 列表）|
 | `search_otx_pulses` | 按关键词搜索 OTX 威胁脉冲 |
 
-### 💬 特色 Prompts（指导 AI 工作流）
+### 💬 业务场景 Prompts（指导 AI 工作流）
 
-本服务内置原生 MCP Prompts，引导大模型按标准流程进行深度安全研判：
-| Prompt Name | 场景描述 |
-|---|---|
-| `analyze_threat_actor` | 指导 AI 分析某一黑客组织的攻击特征、关联技术，并提出针对性地防御措施 |
-| `investigate_asset_supply_chain`| 提供供应链风险分析模板：结合 CVE 与 OSV 查询给特定资产定级 |
+本服务内置原生 MCP Prompts，引导大模型按标准流程进行深度安全研判，覆盖三大业务主线：
+
+| 领域 | Prompt Name | 场景描述 |
+|---|---|---|
+| **通用** | `analyze_threat_actor` | 组织画像：查询黑客组织 APT 特征及关联 MITRE 技术与防御措施 |
+| **通用** | `investigate_asset_supply_chain` | 供应链排查：结合 CVE 与 OSV 评估软件库/组件的安全风险 |
+| **IT 安全** | `it_incident_triage` | SOC 告警研判：IOC 查询 → ATT&CK 映射 → D3FEND 响应止血建议 |
+| **IT 安全** | `it_patch_prioritization` | 漏洞管理：依据 CVSS + EPSS + CISA KEV + 厂商公告的 Patch 优先级规划 |
+| **OT 工业** | `ot_plant_security_assessment` | 工厂评估：针对 Siemens/Rockwell 等系统的漏洞排查及 IEC 62443 风险报告 |
+| **OT 工业** | `ot_ics_compromise_investigation` | 应急响应：OT 异常现象 → 关联 ICS 专属 TTPs 及 CVE → 输出响应 Playbook |
+| **AI LLM** | `ai_llm_deployment_security_review`| 上线评估：结合 OWASP LLM / ATLAS 与框架漏洞的投产前 Go/No-Go 安全审查 |
+| **AI LLM** | `ai_vendor_security_posture` | 供应商尽调：AI 厂商历史漏洞/安全公告回顾，输出供应商安全概况评分卡 |
 
 ---
 
@@ -83,6 +97,7 @@
 | `cti://ai/atlas/techniques` | MITRE ATLAS AI 威胁矩阵技术全表 |
 | `cti://ai/owasp-llm-top10` | OWASP LLM Top 10 完整文档（2025）|
 | `cti://ai/frameworks` | AI 框架 CVE 查询关键词映射表 |
+| `cti://vendors/advisory-sources`| 13 家主流 IT/OT/AI 厂商安全公告数据源状态表 |
 
 ---
 
@@ -91,7 +106,7 @@
 ### 1. 安装依赖
 
 ```bash
-cd c:\Users\songj\cti
+cd /opt/cti-mcp-server # 若是本地，切换到项目根目录
 pip install -e .
 ```
 
@@ -230,6 +245,7 @@ async with streamablehttp_client("http://localhost:8080/mcp") as (read, write, _
 | MITRE ATT&CK for ICS | OT/SCADA TTP | ❌ 无需 | 本地 STIX，离线 | 自动下载 |
 | MITRE ATLAS | AI/ML 威胁矩阵 | ❌ 无需 | 本地 YAML，离线 | 自动下载 |
 | CISA ICS Advisories | OT 安全公告 | ❌ 无需 | RSS，在线 | 无需申请 |
+| Vendor Advisories | IT/OT/AI 厂商公告 | ❌ 无需 | RSS/Atom + NVD 在线 | 无须申请 |
 | OWASP LLM Top 10 | LLM 应用风险 | ❌ 无需 | 内置静态数据 | 无需申请 |
 
 > MITRE 数据首次运行自动下载（企业版 ~30MB，ICS ~5MB，ATLAS ~1MB），之后完全离线。
@@ -279,7 +295,7 @@ python tests/test_business_scenarios.py
 ```
 cti/
 ├── src/
-│   ├── server.py               # FastMCP 主入口（18 Tools + 9 Resources）
+│   ├── server.py               # FastMCP 主入口（20 Tools + 8 Prompts + 10 Resources）
 │   ├── config.py               # 配置管理（速率/认证/审计）
 │   ├── models.py               # Pydantic 数据模型
 │   ├── cache.py                # TTL 内存缓存
@@ -294,6 +310,7 @@ cti/
 │       ├── mitre_ics.py        # MITRE ATT&CK for ICS（本地 STIX）
 │       ├── mitre_atlas.py      # MITRE ATLAS（AI 威胁，本地 YAML）
 │       ├── cisa_ics.py         # CISA ICS Advisories（RSS）
+│       ├── vendor_advisories.py# 13 家主流厂商 IT/OT/AI 官方安全公告 (RSS/NVD)
 │       └── cve.py              # NIST NVD CVE API v2.0
 ├── tests/
 │   ├── test_server.py          # 单元测试（63 tests）
