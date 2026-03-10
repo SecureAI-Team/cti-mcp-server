@@ -26,6 +26,7 @@ from .connectors.mitre_d3fend import MitreD3fendConnector
 from .connectors.osv import OSVConnector
 from .connectors.otx import OTXConnector
 from .connectors.threat_intel import ThreatIntelConnector
+from .connectors.vendor_advisories import VendorAdvisoryConnector, VENDOR_REGISTRY
 from .connectors.virustotal import VirusTotalConnector
 from .models import (
     DataSourceStatus,
@@ -53,7 +54,9 @@ mcp = FastMCP(
     instructions=(
         "This is a Cyber Threat Intelligence (CTI) MCP server with ICS/OT support. "
         "Tools available: IOC lookup (IP/domain/hash/URL), CVE queries, "
-        "MITRE ATT&CK Enterprise & ICS techniques, CISA ICS advisories, and OTX pulses. "
+        "MITRE ATT&CK Enterprise & ICS techniques, CISA ICS advisories, "
+        "Vendor Security Advisories (Microsoft/Siemens/Cisco/SAP/Oracle/GE/Rockwell/OpenAI/...), "
+        "and OTX pulses. "
         "Read `cti://status` first to see which data sources are active."
     ),
 )
@@ -71,6 +74,7 @@ _intel = ThreatIntelConnector()
 _mac = MacOUIConnector()
 _osv = OSVConnector()
 _d3fend = MitreD3fendConnector()
+_vendor_adv = VendorAdvisoryConnector()
 
 
 # ── Startup warmup (background thread) ───────────────────────────────────────
@@ -1254,6 +1258,172 @@ async def resource_ai_frameworks() -> str:
     ]
     for fw, keywords in sorted(AI_FRAMEWORK_CVE_MAP.items()):
         lines.append(f"| {fw} | {', '.join(keywords)} |")
+    return "\n".join(lines)
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOLS — VENDOR SECURITY ADVISORIES
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def get_recent_vendor_advisories(
+    vendor: Annotated[str | None, Field(
+        description=(
+            "Vendor name to filter by (e.g. 'microsoft', 'siemens', 'cisco', 'sap', "
+            "'oracle', 'rockwell', 'ge', 'schneider', 'abb', 'honeywell', "
+            "'openai', 'anthropic', 'google'). "
+            "Omit for all vendors."
+        )
+    )] = None,
+    category: Annotated[str | None, Field(
+        description="Filter by category: 'it', 'ot' (industrial), or 'ai'. Omit for all."
+    )] = None,
+    limit: Annotated[int, Field(description="Max results (1-50)", ge=1, le=50)] = 10,
+) -> dict:
+    """
+    Get the most recent security advisories from major IT, OT, and AI vendors.
+    Aggregates official RSS/Atom feeds (Microsoft MSRC, Siemens ProductCERT, Cisco PSIRT,
+    SAP Security Notes, Oracle CPU) and NVD CVE data for vendors without public feeds
+    (GE, Rockwell, Schneider, OpenAI, Anthropic).
+    No API key required.
+
+    Examples:
+    - vendor="microsoft"          ← Latest Microsoft MSRC advisories (Patch Tuesday)
+    - vendor="siemens"            ← Siemens ProductCERT OT/ICS advisories
+    - vendor="cisco"              ← Cisco PSIRT advisories
+    - category="ot", limit=20    ← All recent OT/ICS vendor advisories
+    - category="ai"               ← OpenAI/Anthropic/Google security bulletins
+    """
+    if vendor:
+        try:
+            vendor = validate_query_string(vendor, "vendor")
+        except ValidationError as exc:
+            return {"error": str(exc)}
+
+        vendor_lower = vendor.lower().strip()
+        if vendor_lower not in VENDOR_REGISTRY:
+            # Partial match check
+            matches = [k for k in VENDOR_REGISTRY if vendor_lower in k or k in vendor_lower]
+            if not matches:
+                return {
+                    "error": f"Vendor '{vendor}' not found.",
+                    "supported_vendors": sorted(VENDOR_REGISTRY.keys()),
+                }
+
+    with AuditTimer("get_recent_vendor_advisories") as t:
+        advisories = await _vendor_adv.get_recent(vendor=vendor, category=category, limit=limit)
+        t.finish(result_count=len(advisories))
+
+    return {
+        "vendor_filter": vendor,
+        "category_filter": category,
+        "count": len(advisories),
+        "advisories": [
+            {
+                "vendor": a.vendor_display,
+                "title": a.title,
+                "advisory_id": a.advisory_id,
+                "published": a.published.isoformat() if a.published else None,
+                "severity": a.severity,
+                "cve_ids": a.cve_ids[:10],
+                "summary": a.summary,
+                "url": a.url,
+                "source": a.source,
+            }
+            for a in advisories
+        ],
+    }
+
+
+@mcp.tool()
+async def search_vendor_advisories(
+    keyword: Annotated[str | None, Field(
+        description="Search term matched against advisory title and summary"
+    )] = None,
+    vendor: Annotated[str | None, Field(
+        description="Vendor name filter (e.g. 'microsoft', 'siemens', 'cisco')"
+    )] = None,
+    cve_id: Annotated[str | None, Field(
+        description="CVE ID to find in vendor advisories (e.g. CVE-2024-21413)"
+    )] = None,
+    category: Annotated[str | None, Field(
+        description="Filter by 'it', 'ot', or 'ai'"
+    )] = None,
+    limit: Annotated[int, Field(description="Max results (1-50)", ge=1, le=50)] = 20,
+) -> dict:
+    """
+    Search security advisories across major vendors by keyword or CVE ID.
+    Covers Microsoft, Siemens, Cisco, SAP, Oracle, GE, Rockwell, Schneider,
+    OpenAI, Anthropic, Google, ABB, Honeywell.
+    No API key required.
+
+    Examples:
+    - keyword="remote code execution", category="ot"  ← RCE in ICS/OT products
+    - vendor="microsoft", keyword="zero day"          ← Microsoft zero-days
+    - cve_id="CVE-2024-21413"                         ← Find which vendors mention this CVE
+    - keyword="critical", category="ai"               ← Critical AI/LLM security issues
+    - vendor="cisco", keyword="IOS"                   ← Cisco IOS advisories
+    """
+    if not keyword and not vendor and not cve_id:
+        return {"error": "Provide at least one of: keyword, vendor, cve_id"}
+
+    try:
+        if keyword:
+            keyword = validate_query_string(keyword, "keyword")
+        if vendor:
+            vendor = validate_query_string(vendor, "vendor")
+        if cve_id:
+            cve_id = validate_cve_id(cve_id)
+    except ValidationError as exc:
+        return {"error": str(exc)}
+
+    with AuditTimer("search_vendor_advisories") as t:
+        advisories = await _vendor_adv.search(
+            vendor=vendor,
+            keyword=keyword,
+            cve_id=cve_id,
+            category=category,
+            limit=limit,
+        )
+        t.finish(result_count=len(advisories))
+
+    return {
+        "keyword": keyword,
+        "vendor_filter": vendor,
+        "cve_filter": cve_id,
+        "category_filter": category,
+        "count": len(advisories),
+        "advisories": [
+            {
+                "vendor": a.vendor_display,
+                "title": a.title,
+                "advisory_id": a.advisory_id,
+                "published": a.published.isoformat() if a.published else None,
+                "severity": a.severity,
+                "cve_ids": a.cve_ids[:10],
+                "summary": a.summary,
+                "url": a.url,
+                "source": a.source,
+            }
+            for a in advisories
+        ],
+    }
+
+
+@mcp.resource("cti://vendors/advisory-sources")
+async def resource_vendor_advisory_sources() -> str:
+    """Supported vendors for security advisory queries, with category and feed info."""
+    vendors = _vendor_adv.list_vendors()
+    lines = [
+        "# Supported Vendor Security Advisory Sources\n",
+        "Use these vendor names with `get_recent_vendor_advisories` and `search_vendor_advisories`.\n",
+        "| Vendor | Category | Feed Type | Description |",
+        "|---|---|---|---|",
+    ]
+    for v in vendors:
+        feed_type = "RSS/Atom ✅" if v["has_rss"] else "NVD CVE 🔍"
+        lines.append(f"| {v['display_name']} (`{v['name']}`) | {v['category'].upper()} | {feed_type} | {v['description']} |")
     return "\n".join(lines)
 
 

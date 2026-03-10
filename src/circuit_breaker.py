@@ -111,6 +111,7 @@ _breakers: dict[str, CircuitBreaker] = {
     "otx": CircuitBreaker("otx", failure_threshold=3, recovery_timeout=60),
     "nvd": CircuitBreaker("nvd", failure_threshold=3, recovery_timeout=120),
     "cisa": CircuitBreaker("cisa", failure_threshold=3, recovery_timeout=120),
+    "vendor_advisories": CircuitBreaker("vendor_advisories", failure_threshold=5, recovery_timeout=300),
 }
 
 

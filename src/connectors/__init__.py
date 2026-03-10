@@ -6,6 +6,7 @@ from .mitre_atlas import MitreAtlasConnector
 from .mitre_attack import MitreAttackConnector
 from .mitre_ics import MitreICSConnector
 from .otx import OTXConnector
+from .vendor_advisories import VendorAdvisoryConnector
 from .virustotal import VirusTotalConnector
 
 __all__ = [
@@ -16,5 +17,6 @@ __all__ = [
     "MitreAtlasConnector",
     "CVEConnector",
     "CISAICSConnector",
+    "VendorAdvisoryConnector",
 ]
 
