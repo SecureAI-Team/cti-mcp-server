@@ -33,8 +33,6 @@ from typing import Any
 import httpx
 
 from ..circuit_breaker import get_breaker
-from ..models import ServiceStatus
-
 logger = logging.getLogger(__name__)
 
 # ── Vendor Registry ───────────────────────────────────────────────────────────
