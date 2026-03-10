@@ -1478,6 +1478,176 @@ async def investigate_asset_supply_chain(
     ]
 
 
+# ── IT Security Operations ────────────────────────────────────────────────────
+
+@mcp.prompt()
+async def it_incident_triage(
+    indicator: Annotated[str, Field(description="Suspicious indicator: IP address, domain, file hash, or URL flagged in IT environment")],
+    system_context: Annotated[str, Field(description="Brief description of the affected IT system (e.g. 'Windows Server 2019 used as internal file share')")] = "corporate IT system",
+) -> list[PromptMessage]:
+    """
+    IT Security Operations Center (SOC) — Rapid triage of a suspicious indicator.
+    Chains IOC lookup → active exploit check → MITRE ATT&CK mapping → recommended response actions.
+    Ideal for: SOC analysts investigating endpoint/network alerts.
+    """
+    prompt_text = (
+        f"**IT SOC Incident Triage**\n\n"
+        f"A suspicious indicator has been flagged in our {system_context}:\n"
+        f"Indicator: `{indicator}`\n\n"
+        f"Please perform a complete triage:\n"
+        f"1. Use `lookup_ioc` to check reputation across threat intelligence sources (VirusTotal, OTX).\n"
+        f"2. If the indicator has associated CVEs, use `lookup_cve` on the top 2-3 to get CVSS scores and patch status.\n"
+        f"3. Use `search_mitre_techniques` to identify the ATT&CK techniques most likely associated with this type of indicator.\n"
+        f"4. For associated techniques, use `get_mitre_d3fend_countermeasures` to suggest detections we should enable immediately.\n"
+        f"5. Output a structured triage report with: Verdict / Confidence / Associated techniques / Immediate actions (within 1h) / Short-term hardening actions (within 1 week)."
+    )
+    return [PromptMessage(role="user", content=TextContent(type="text", text=prompt_text))]
+
+
+@mcp.prompt()
+async def it_patch_prioritization(
+    product: Annotated[str, Field(description="Software product or vendor to assess (e.g. 'Microsoft Exchange', 'Cisco IOS', 'Apache HTTP Server')")],
+) -> list[PromptMessage]:
+    """
+    IT Patch Management — Prioritize which CVEs to patch first for a given product.
+    Uses CVSS, EPSS exploit probability, CISA KEV status, and vendor advisories.
+    Ideal for: Patch Tuesday planning, IT vulnerability management teams.
+    """
+    prompt_text = (
+        f"**Patch Prioritization Report for: {product}**\n\n"
+        f"Our security team needs to prioritize patching for `{product}`.\n\n"
+        f"Please run the following analysis:\n"
+        f"1. Use `search_vendor_advisories` with the relevant vendor name to get the latest official security advisories.\n"
+        f"2. Use `search_cves` to find HIGH and CRITICAL CVEs for this product.\n"
+        f"3. For each CVE found (up to 5), use `is_cve_known_exploited` to check CISA KEV status and `get_epss_score` for exploitation probability.\n"
+        f"4. Rank the CVEs by: (1) KEV status, (2) EPSS score, (3) CVSS base score.\n"
+        f"5. Output a patch priority table:\n"
+        f"   | CVE | CVSS | EPSS | In KEV | Recommendation | Patch Deadline |\n"
+        f"   with clear SLA recommendations: P1=24h (KEV), P2=7d (EPSS>50%), P3=30d (others)."
+    )
+    return [PromptMessage(role="user", content=TextContent(type="text", text=prompt_text))]
+
+
+# ── OT / ICS Industrial Security ─────────────────────────────────────────────
+
+@mcp.prompt()
+async def ot_plant_security_assessment(
+    plant_type: Annotated[str, Field(description="Type of industrial facility (e.g. 'power plant', 'water treatment', 'oil refinery', 'manufacturing')")],
+    vendor_list: Annotated[str, Field(description="Key OT vendors or products in use, comma-separated (e.g. 'Siemens S7, Rockwell ControlLogix, Honeywell DCS')")],
+) -> list[PromptMessage]:
+    """
+    OT Plant Security Assessment — Full security posture review for an industrial facility.
+    Chains ICS advisories → OT CVEs → MITRE ATT&CK for ICS techniques → risk summary.
+    Ideal for: OT security engineers, plant managers, compliance teams (IEC 62443).
+    """
+    prompt_text = (
+        f"**OT Plant Security Assessment**\n\n"
+        f"Facility type: {plant_type}\n"
+        f"OT vendors/products in use: {vendor_list}\n\n"
+        f"Please perform a systematic security assessment:\n"
+        f"1. Use `get_recent_vendor_advisories` for each vendor mentioned (e.g. siemens, rockwell, honeywell) to pull the latest security bulletins.\n"
+        f"2. Use `lookup_ot_asset_cves` for each vendor/product combination to find unpatched CVEs (severity=HIGH or CRITICAL).\n"
+        f"3. Use `get_recent_ics_advisories` to check CISA's latest ICS-CERT advisories relevant to this facility type.\n"
+        f"4. Use `search_mitre_ics_techniques` to identify the top 5 ATT&CK for ICS techniques targeting this sector.\n"
+        f"5. Produce an IEC 62443-aligned risk report:\n"
+        f"   - Unresolved CVEs with patch urgency\n"
+        f"   - Active threat actors targeting this sector (with MITRE ATT&CK techniques)\n"
+        f"   - Top 5 immediate security controls to implement\n"
+        f"   - Recommended monitoring and detection signatures"
+    )
+    return [PromptMessage(role="user", content=TextContent(type="text", text=prompt_text))]
+
+
+@mcp.prompt()
+async def ot_ics_compromise_investigation(
+    anomaly_description: Annotated[str, Field(description="Description of the suspicious behavior or anomaly observed in the OT/ICS network (e.g. 'unexpected Modbus writes to PLC outputs at 2AM')")],
+    affected_system: Annotated[str, Field(description="Affected OT system or device (e.g. 'Siemens S7-300 PLC', 'Schneider Electric SCADA HMI')")] = "ICS/OT device",
+) -> list[PromptMessage]:
+    """
+    OT ICS Compromise Investigation — Threat hunt and incident response for OT anomalies.
+    Maps anomaly → ATT&CK for ICS techniques → threat actor attribution → response playbook.
+    Ideal for: OT incident response teams, industrial SOC analysts.
+    """
+    prompt_text = (
+        f"**OT/ICS Compromise Investigation**\n\n"
+        f"Anomaly detected on: {affected_system}\n"
+        f"Description: {anomaly_description}\n\n"
+        f"Please run an OT threat investigation:\n"
+        f"1. Use `search_mitre_ics_techniques` to identify which ATT&CK for ICS techniques match this anomaly pattern.\n"
+        f"2. For the top matching techniques, look up the full technique detail with `get_mitre_ics_technique`.\n"
+        f"3. Use `search_cves` with the affected device/vendor as keyword to find recently disclosed vulnerabilities that could explain the anomaly.\n"
+        f"4. Use `search_ics_advisories` to see if CISA has issued recent advisories for this vendor/system.\n"
+        f"5. Produce an ICS incident response playbook:\n"
+        f"   - Probable attack technique (with MITRE ICS TTP IDs)\n"
+        f"   - Potential threat actors known to use these TTPs\n"
+        f"   - Immediate containment steps (OT-safe, network-aware)\n"
+        f"   - Evidence to collect for forensic analysis\n"
+        f"   - Notification requirements (CISA, sector ISAC, regulators)"
+    )
+    return [PromptMessage(role="user", content=TextContent(type="text", text=prompt_text))]
+
+
+# ── AI / LLM Security ─────────────────────────────────────────────────────────
+
+@mcp.prompt()
+async def ai_llm_deployment_security_review(
+    system_name: Annotated[str, Field(description="Name of the AI/LLM system or application being reviewed (e.g. 'Customer service chatbot powered by GPT-4')")],
+    framework: Annotated[str, Field(description="AI framework or stack in use (e.g. 'langchain', 'openai', 'ollama', 'autogpt')")] = "langchain",
+    capabilities: Annotated[str, Field(description="Capabilities the AI agent has, comma-separated (e.g. 'web_search,code_execution,database_access,email')")] = "web_search,api_calls",
+) -> list[PromptMessage]:
+    """
+    AI/LLM Deployment Security Review — Comprehensive security assessment before going live.
+    Covers OWASP LLM Top 10, MITRE ATLAS techniques, framework CVEs, and hardening recommendations.
+    Ideal for: AI product teams, security architects reviewing LLM applications for production.
+    """
+    prompt_text = (
+        f"**AI/LLM Deployment Security Review**\n\n"
+        f"System: {system_name}\n"
+        f"Framework: {framework}\n"
+        f"Capabilities granted to AI: {capabilities}\n\n"
+        f"Please perform a pre-deployment security review:\n"
+        f"1. Use `analyze_ai_agent_risk` with the provided framework and capabilities to get an automated risk score.\n"
+        f"2. Use `lookup_ai_framework_cves` for the framework to find known CVEs we need to patch before launch.\n"
+        f"3. Use `get_owasp_llm_risk` for each triggered OWASP risk (from step 1) to get detailed mitigation steps.\n"
+        f"4. Use `search_atlas_techniques` with keywords matching the capabilities (e.g. 'prompt injection', 'data exfiltration') to find MITRE ATLAS techniques to defend against.\n"
+        f"5. Produce a Go/No-Go security report:\n"
+        f"   - Overall risk rating (LOW/MEDIUM/HIGH/CRITICAL)\n"
+        f"   - OWASP LLM Top 10 risks that apply\n"
+        f"   - MITRE ATLAS adversarial techniques to mitigate\n"
+        f"   - Must-fix items before launch (blocking)\n"
+        f"   - Recommended security controls and monitoring\n"
+        f"   - Compliance considerations (GDPR, AI Act, SOC2)"
+    )
+    return [PromptMessage(role="user", content=TextContent(type="text", text=prompt_text))]
+
+
+@mcp.prompt()
+async def ai_vendor_security_posture(
+    ai_vendor: Annotated[str, Field(description="AI vendor or model provider to investigate (e.g. 'openai', 'anthropic', 'google', 'meta')")],
+) -> list[PromptMessage]:
+    """
+    AI Vendor Security Posture Review — Assess the security track record of an AI/LLM vendor.
+    Checks their CVE history, published advisories, and disclosed vulnerabilities.
+    Ideal for: CISO risk assessments, AI procurement security due diligence.
+    """
+    prompt_text = (
+        f"**AI Vendor Security Posture Review: {ai_vendor}**\n\n"
+        f"Our organization is evaluating or already uses AI services from `{ai_vendor}`.\n"
+        f"Please perform a security due diligence assessment:\n\n"
+        f"1. Use `get_recent_vendor_advisories` with vendor='{ai_vendor}' to pull their recent security bulletins.\n"
+        f"2. Use `lookup_ai_framework_cves` if the vendor maps to an AI framework to find CVEs in their software stack.\n"
+        f"3. Use `search_atlas_techniques` with 'model extraction' and 'data poisoning' to understand attack vectors targeting this type of AI system.\n"
+        f"4. Use `get_owasp_llm_risk` to pull the full OWASP LLM Top 10 relevant to consuming this vendor's API.\n"
+        f"5. Produce a vendor security scorecard:\n"
+        f"   - CVE count and severity breakdown (last 12 months)\n"
+        f"   - Time-to-patch track record\n"
+        f"   - Key security risks in using their service\n"
+        f"   - Recommended contractual security requirements\n"
+        f"   - Suggested monitoring and contingency plans (vendor lock-in / outage risk)"
+    )
+    return [PromptMessage(role="user", content=TextContent(type="text", text=prompt_text))]
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SERVER ENTRYPOINT
 # ══════════════════════════════════════════════════════════════════════════════
