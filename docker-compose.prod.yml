@@ -66,6 +66,7 @@ services:
       - HOST=0.0.0.0
       - PORT=5173
       - DANGEROUSLY_OMIT_AUTH=true
+      - DANGEROUSLY_ALLOW_ORIGINS=*
     command: >
       npx @modelcontextprotocol/inspector --transport sse --server-url http://nginx:80/mcp --header "Authorization: Bearer ${MCP_AUTH_TOKEN}"
     depends_on:
