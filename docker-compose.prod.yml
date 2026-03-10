@@ -59,7 +59,8 @@ services:
     container_name: cti-mcp-inspector
     restart: always
     ports:
-      - "5173:5173"
+      - "5173:6274"
+      - "6277:6277"
     environment:
       - npm_config_yes=true
       - HOST=0.0.0.0
