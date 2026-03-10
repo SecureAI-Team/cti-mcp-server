@@ -53,5 +53,20 @@ services:
         max-size: "50m"
         max-file: "3"
 
+  # MCP Inspector GUI for testing
+  inspector:
+    image: node:22-alpine
+    container_name: cti-mcp-inspector
+    restart: always
+    ports:
+      - "5173:5173"
+    environment:
+      - npm_config_yes=true
+      - HOST=0.0.0.0
+    command: >
+      npx @modelcontextprotocol/inspector  --transport sse  --server-url http://nginx:80/mcp  --header "Authorization: Bearer ${MCP_AUTH_TOKEN}"
+    depends_on:
+      - nginx
+
 volumes:
   mitre_cache:
