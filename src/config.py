@@ -44,6 +44,14 @@ class Config:
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     AUDIT_LOG_DIR: str = os.getenv("AUDIT_LOG_DIR", "logs")
 
+    # ── MITRE / Cache directories ────────────────────────────
+    # In Docker: set MITRE_CACHE_DIR=/app/.mitre_cache (Dockerfile ENV)
+    # Local dev: falls back to <project_root>/.mitre_cache
+    MITRE_CACHE_DIR: str = os.getenv(
+        "MITRE_CACHE_DIR",
+        str(Path(__file__).parent.parent / ".mitre_cache"),
+    )
+
     # ── Timeouts ──────────────────────────────────────────────
     HTTP_TIMEOUT: float = float(os.getenv("HTTP_TIMEOUT", "20"))
 

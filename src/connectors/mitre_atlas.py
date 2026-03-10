@@ -20,12 +20,13 @@ from typing import Any
 
 import httpx
 
+from ..config import config
 from ..models import MitreTactic, MitreTechnique
 
 logger = logging.getLogger(__name__)
 
-_CACHE_DIR = Path(__file__).parent.parent.parent / ".mitre_cache"
-_CACHE_DIR.mkdir(exist_ok=True)
+_CACHE_DIR = Path(config.MITRE_CACHE_DIR)
+_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 _ATLAS_YAML_URL = (
     "https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/ATLAS.yaml"

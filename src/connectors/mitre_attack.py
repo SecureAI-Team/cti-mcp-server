@@ -8,13 +8,14 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from ..config import config
 from ..models import MitreTactic, MitreTechnique, MitreGroup
 
 logger = logging.getLogger(__name__)
 
-# Local cache path for ATT&CK STIX data
-_STIX_CACHE_DIR = Path(__file__).parent.parent.parent / ".mitre_cache"
-_STIX_CACHE_DIR.mkdir(exist_ok=True)
+# Local cache path for ATT&CK STIX data (respects MITRE_CACHE_DIR env var)
+_STIX_CACHE_DIR = Path(config.MITRE_CACHE_DIR)
+_STIX_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 _ENTERPRISE_STIX_URL = (
     "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json"

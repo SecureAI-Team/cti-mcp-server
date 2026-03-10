@@ -10,12 +10,13 @@ from typing import Any
 
 import httpx
 
+from ..config import config
 from ..models import MitreTactic, MitreTechnique
 
 logger = logging.getLogger(__name__)
 
-_STIX_CACHE_DIR = Path(__file__).parent.parent.parent / ".mitre_cache"
-_STIX_CACHE_DIR.mkdir(exist_ok=True)
+_STIX_CACHE_DIR = Path(config.MITRE_CACHE_DIR)
+_STIX_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 _ICS_STIX_URL = (
     "https://raw.githubusercontent.com/mitre/cti/master/ics-attack/ics-attack.json"
