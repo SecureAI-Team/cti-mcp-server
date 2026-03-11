@@ -63,6 +63,7 @@ services:
       - "6277:6277" # MCP Proxy
     environment:
       - npm_config_yes=true
+      - HOST=0.0.0.0
       - DANGEROUSLY_OMIT_AUTH=true
       - DANGEROUSLY_ALLOW_ORIGINS=*
     command: >
