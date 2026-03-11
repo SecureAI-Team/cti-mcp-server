@@ -1671,6 +1671,29 @@ def main() -> None:
         logger.info("HTTP mode: %s:%d (auth=%s)",
                     config.MCP_HTTP_HOST, config.MCP_HTTP_PORT,
                     "enabled" if config.is_http_auth_enabled() else "disabled")
+        
+        # DEBUG: Dump FastMCP properties to find the exact route
+        logger.info("====== FASTMCP DEBUG INFO ======")
+        logger.info("mcp dir: %s", dir(mcp))
+        if hasattr(mcp, "name"):
+            logger.info("mcp name: %s", mcp.name)
+        
+        # Try to initialize the ASGI app to inspect routes
+        try:
+            if hasattr(mcp, "_fastapi_app"):
+                from fastapi.routing import APIRoute
+                app = mcp._fastapi_app
+                for route in app.routes:
+                    if hasattr(route, "path"):
+                        logger.info("Found explicitly mapped route: %s methods=%s", route.path, getattr(route, "methods", []))
+            elif hasattr(mcp, "auth_token"):
+                pass
+        except Exception as e:
+            logger.error("Debug route inspection failed: %s", e)
+            
+        logger.info("Starting Uvicorn directly from FastMCP...")
+        logger.info("=================================")
+
         mcp.run(transport="streamable-http",
                 host=config.MCP_HTTP_HOST,
                 port=config.MCP_HTTP_PORT)
