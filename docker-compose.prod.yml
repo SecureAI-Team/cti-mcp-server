@@ -65,7 +65,7 @@ services:
       - npm_config_yes=true
       - HOST=0.0.0.0
       - DANGEROUSLY_ALLOW_ORIGINS=http://45.63.121.92,http://45.63.121.92:5173
-      - MCP_PROXY_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
+      - DANGEROUSLY_OMIT_AUTH=true
     command: >
       npx @modelcontextprotocol/inspector --transport sse --server-url http://cti-mcp:8000/mcp --header "Host: localhost"
     depends_on:
