@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CTI MCP Server Demo</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; color: #333; }
+        .container { max-width: 900px; margin: 0 auto; }
+        .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .status { padding: 6px 12px; border-radius: 20px; font-weight: bold; font-size: 14px; }
+        .status.disconnected { background: #fee2e2; color: #991b1b; }
+        .status.connected { background: #dcfce7; color: #166534; }
+        .panel { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .panel h2 { margin-top: 0; padding-bottom: 10px; border-bottom: 1px solid #eee; font-size: 18px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .tool-list, .prompt-list { list-style: none; padding: 0; margin: 0; max-height: 400px; overflow-y: auto; }
+        .item { padding: 10px; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 10px; cursor: pointer; transition: all 0.2s; }
+        .item:hover { border-color: #3b82f6; background: #eff6ff; }
+        .item-name { font-weight: bold; color: #1f2937; margin-bottom: 4px; }
+        .item-desc { font-size: 12px; color: #6b7280; }
+        button { background: #3b82f6; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #2563eb; }
+        .input-group { margin-bottom: 15px; }
+        .input-group label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 14px; }
+        .input-group input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        #log { background: #1e1e1e; color: #a3be8c; padding: 15px; border-radius: 6px; font-family: monospace; white-space: pre-wrap; height: 300px; overflow-y: auto; font-size: 12px; }
+        .log-method { color: #88c0d0; }
+        pre { margin: 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1 style="margin:0; font-size: 24px;">CTI MCP Server <span style="color:#6b7280; font-size:16px;">Demo Interface</span></h1>
+            </div>
+            <div>
+                <input type="password" id="token" placeholder="Enter MCP_AUTH_TOKEN" style="padding: 6px 12px; border: 1px solid #ccc; border-radius: 4px; margin-right: 10px;">
+                <button id="connectBtn">Connect SSE</button>
+                <span id="status" class="status disconnected">Disconnected</span>
+            </div>
+        </div>
+
+        <div class="grid">
+            <div class="panel">
+                <h2>🛠️ Available Tools (<span id="toolCount">0</span>) <button id="loadTools" style="float:right; padding: 4px 8px; font-size:12px; display:none;">Refresh</button></h2>
+                <ul id="tools" class="tool-list">
+                    <li style="color:#999; text-align:center; padding: 20px;">Connect first to view capabilities</li>
+                </ul>
+            </div>
+            <div class="panel">
+                <h2>📝 Available Prompts (<span id="promptCount">0</span>) <button id="loadPrompts" style="float:right; padding: 4px 8px; font-size:12px; display:none;">Refresh</button></h2>
+                <ul id="prompts" class="prompt-list">
+                    <li style="color:#999; text-align:center; padding: 20px;">Connect first to view capabilities</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>💻 Interaction Console</h2>
+            <div id="log"></div>
+            <div style="margin-top: 15px; display: flex; gap: 10px;">
+                <input type="text" id="methodInput" placeholder="RPC Method (e.g. tools/call)" style="flex: 1; padding: 8px;" value="tools/call">
+                <input type="text" id="paramsInput" placeholder='JSON Params (e.g. {"name": "lookup_cve", "arguments": {}})' style="flex: 3; padding: 8px;" value='{"name": "lookup_cve", "arguments": {"cve_id": "CVE-2021-44228"}}'>
+                <button id="sendBtn" disabled>Send Request</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let eventSource = null;
+        let postEndpoint = null;
+        let messageId = 1;
+
+        const logEl = document.getElementById('log');
+        const statusEl = document.getElementById('status');
+        const connectBtn = document.getElementById('connectBtn');
+        const sendBtn = document.getElementById('sendBtn');
+        const tokenInput = document.getElementById('token');
+
+        function appendLog(text, isError = false) {
+            const entry = document.createElement('div');
+            entry.style.color = isError ? '#bf616a' : 'inherit';
+            entry.innerHTML = `<span style="color:#6b7280">[${new Date().toLocaleTimeString()}]</span> ${text}`;
+            logEl.appendChild(entry);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        connectBtn.addEventListener('click', () => {
+            if (eventSource) {
+                eventSource.close();
+                statusEl.textContent = 'Disconnected';
+                statusEl.className = 'status disconnected';
+                connectBtn.textContent = 'Connect SSE';
+                sendBtn.disabled = true;
+                eventSource = null;
+                return;
+            }
+
+            const token = tokenInput.value.trim();
+            if (!token) {
+                alert("Please enter your MCP Auth Token first");
+                return;
+            }
+
+            // The SSE endpoint on the backend
+            const sseUrl = '/sse'; 
+            appendLog(`Connecting to ${sseUrl}...`);
+            
+            // Note: EventSource doesn't support custom headers natively in pure browser JS!
+            // But we rely on Nginx config passing the MCP_AUTH_TOKEN as a URL parameter or we can't do it.
+            // Wait, Nginx requires Authorization Header. Let's redirect SSE through fetch and use a polyfill, or assume Nginx handles args.
+            // For this simple demo, we will use fetch to intercept the stream.
+            
+            statusEl.textContent = 'Connecting...';
+            
+            // Custom SSE implementation using fetch to support headers
+            fetch(sseUrl, {
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Accept': 'text/event-stream'
+                }
+            }).then(response => {
+                if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                
+                statusEl.textContent = 'Connected';
+                statusEl.className = 'status connected';
+                connectBtn.textContent = 'Disconnect';
+                appendLog('SSE Stream established.');
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                
+                let buffer = '';
+
+                function readStream() {
+                    reader.read().then(({done, value}) => {
+                        if (done) {
+                            appendLog('Stream closed by server.');
+                            statusEl.textContent = 'Disconnected';
+                            statusEl.className = 'status disconnected';
+                            return;
+                        }
+                        
+                        buffer += decoder.decode(value, {stream: true});
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop(); // keep last incomplete line
+
+                        let currentEvent = null;
+                        
+                        for (const line of lines) {
+                            if (line.startsWith('endpoint:')) {
+                                postEndpoint = line.substring(9).trim();
+                                appendLog(`POST Endpoint received: ${postEndpoint}`);
+                                sendBtn.disabled = false;
+                                
+                                // Auto load capabilities
+                                setTimeout(() => {
+                                    document.getElementById('loadTools').click();
+                                    document.getElementById('loadPrompts').click();
+                                }, 500);
+                            } else if (line.startsWith('data:')) {
+                                try {
+                                    const data = JSON.parse(line.substring(5).trim());
+                                    appendLog(`Message Received:\n${JSON.stringify(data, null, 2)}`);
+                                    
+                                    // Handle list responses
+                                    if (data.result && data.result.tools) {
+                                        renderTools(data.result.tools);
+                                    }
+                                    if (data.result && data.result.prompts) {
+                                        renderPrompts(data.result.prompts);
+                                    }
+                                } catch (e) {
+                                    // Ignore parse errors for split chunks
+                                }
+                            }
+                        }
+                        readStream();
+                    }).catch(err => {
+                        appendLog(`Stream Error: ${err.message}`, true);
+                        statusEl.textContent = 'Disconnected';
+                        statusEl.className = 'status disconnected';
+                    });
+                }
+                
+                readStream();
+                
+            }).catch(err => {
+                statusEl.textContent = 'Disconnected';
+                statusEl.className = 'status disconnected';
+                appendLog(`Connection failed: ${err.message}`, true);
+            });
+        });
+
+        async function sendRpc(method, params = {}) {
+            if (!postEndpoint) {
+                appendLog("Wait for endpoint...", true);
+                return;
+            }
+            const payload = {
+                jsonrpc: "2.0",
+                method: method,
+                params: params,
+                id: messageId++
+            };
+            
+            appendLog(`Sending: <span class="log-method">${method}</span>\n${JSON.stringify(params)}`);
+            
+            try {
+                const res = await fetch(postEndpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${tokenInput.value.trim()}`
+                    },
+                    body: JSON.stringify(payload)
+                });
+                // In MCP SSE, responses usually come back via the SSE stream, not the POST response body!
+                if (!res.ok) {
+                    appendLog(`POST failed: HTTP ${res.status}`, true);
+                } else {
+                    appendLog(`POST Success (waiting for response on stream...)`);
+                }
+            } catch (err) {
+                appendLog(`POST Error: ${err.message}`, true);
+            }
+        }
+
+        document.getElementById('loadTools').addEventListener('click', () => sendRpc('tools/list'));
+        document.getElementById('loadPrompts').addEventListener('click', () => sendRpc('prompts/list'));
+        
+        sendBtn.addEventListener('click', () => {
+            const method = document.getElementById('methodInput').value;
+            let params = {};
+            try {
+                params = JSON.parse(document.getElementById('paramsInput').value);
+            } catch(e) {
+                alert("Invalid JSON parameters");
+                return;
+            }
+            sendRpc(method, params);
+        });
+
+        function renderTools(tools) {
+            const ul = document.getElementById('tools');
+            ul.innerHTML = '';
+            document.getElementById('toolCount').textContent = tools.length;
+            
+            tools.forEach(t => {
+                const li = document.createElement('li');
+                li.className = 'item';
+                li.innerHTML = `<div class="item-name">${t.name}</div><div class="item-desc">${t.description || 'No description'}</div>`;
+                li.onclick = () => {
+                    document.getElementById('methodInput').value = 'tools/call';
+                    
+                    // Generate dummy args
+                    const dummyArgs = {};
+                    if (t.inputSchema && t.inputSchema.properties) {
+                        for(const [k, v] of Object.entries(t.inputSchema.properties)) {
+                            dummyArgs[k] = v.type === 'string' ? "example" : null;
+                        }
+                    }
+                    
+                    document.getElementById('paramsInput').value = JSON.stringify({
+                        name: t.name,
+                        arguments: dummyArgs
+                    });
+                };
+                ul.appendChild(li);
+            });
+            document.getElementById('loadTools').style.display = 'block';
+        }
+
+        function renderPrompts(prompts) {
+            const ul = document.getElementById('prompts');
+            ul.innerHTML = '';
+            document.getElementById('promptCount').textContent = prompts.length;
+            
+            prompts.forEach(p => {
+                const li = document.createElement('li');
+                li.className = 'item';
+                li.innerHTML = `<div class="item-name">${p.name}</div><div class="item-desc">${p.description || 'No description'}</div>`;
+                li.onclick = () => {
+                    document.getElementById('methodInput').value = 'prompts/get';
+                    
+                    const dummyArgs = {};
+                    if (p.arguments) {
+                        p.arguments.forEach(arg => dummyArgs[arg.name] = "example");
+                    }
+                    
+                    document.getElementById('paramsInput').value = JSON.stringify({
+                        name: p.name,
+                        arguments: dummyArgs
+                    });
+                };
+                ul.appendChild(li);
+            });
+            document.getElementById('loadPrompts').style.display = 'block';
+        }
+    </script>
+</body>
+</html>

@@ -45,6 +45,7 @@ services:
       # - "443:443" # Uncomment when configuring SSL certificates
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./public:/usr/share/nginx/html:ro
     depends_on:
       - cti-mcp
     logging:
