@@ -64,8 +64,8 @@ services:
     environment:
       - npm_config_yes=true
       - HOST=0.0.0.0
-      - DANGEROUSLY_OMIT_AUTH=true
       - DANGEROUSLY_ALLOW_ORIGINS=*
+      - MCP_PROXY_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
     command: >
       npx @modelcontextprotocol/inspector  --transport sse  --server-url http://nginx:80/mcp  --header "Authorization: Bearer ${MCP_AUTH_TOKEN}"
     depends_on:
