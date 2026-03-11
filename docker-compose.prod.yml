@@ -67,7 +67,7 @@ services:
       - DANGEROUSLY_ALLOW_ORIGINS=*
       - MCP_PROXY_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
     command: >
-      npx @modelcontextprotocol/inspector  --transport sse  --server-url http://nginx:80/mcp  --header "Authorization: Bearer ${MCP_AUTH_TOKEN}"
+      npx @modelcontextprotocol/inspector  --transport sse  --server-url http://nginx:80/sse  --header "Authorization: Bearer ${MCP_AUTH_TOKEN}"
     depends_on:
       - nginx
 
