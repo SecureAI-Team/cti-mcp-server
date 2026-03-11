@@ -59,16 +59,14 @@ services:
     container_name: cti-mcp-inspector
     restart: always
     ports:
-      - "5173:6274"
-      - "6277:6277"
+      - "5173:6274" # Web UI
+      - "6277:6277" # MCP Proxy
     environment:
       - npm_config_yes=true
-      - HOST=0.0.0.0
-      - PORT=5173
       - DANGEROUSLY_OMIT_AUTH=true
       - DANGEROUSLY_ALLOW_ORIGINS=*
     command: >
-      npx @modelcontextprotocol/inspector --transport sse --server-url http://nginx:80/mcp --header "Authorization: Bearer ${MCP_AUTH_TOKEN}"
+      npx @modelcontextprotocol/inspector  --transport sse  --server-url http://nginx:80/mcp  --header "Authorization: Bearer ${MCP_AUTH_TOKEN}"
     depends_on:
       - nginx
 
