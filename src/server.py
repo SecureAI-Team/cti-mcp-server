@@ -1671,6 +1671,12 @@ def main() -> None:
         logger.info("HTTP mode: %s:%d (auth=%s)",
                     config.MCP_HTTP_HOST, config.MCP_HTTP_PORT,
                     "enabled" if config.is_http_auth_enabled() else "disabled")
+        
+        # Bypass FastMCP DNS Rebinding Protection for Docker Composer proxying
+        if hasattr(mcp, "settings") and hasattr(mcp.settings, "allowed_origins"):
+            mcp.settings.allowed_origins.append("http://cti-mcp:8000")
+            logger.info("Injecting Docker Internal Origin to allowed_origins: %s", mcp.settings.allowed_origins)
+
         mcp.run(transport="streamable-http",
                 host=config.MCP_HTTP_HOST,
                 port=config.MCP_HTTP_PORT)
