@@ -1582,8 +1582,6 @@ async def ot_ics_compromise_investigation(
         f"   - Potential threat actors known to use these TTPs\n"
         f"   - Immediate containment steps (OT-safe, network-aware)\n"
         f"   - Evidence to collect for forensic analysis\n"
-        f"   - Notification requirements (CISA, sector ISAC, regulators)"
-    )
     return [PromptMessage(role="user", content=TextContent(type="text", text=prompt_text))]
 
 
@@ -1656,7 +1654,12 @@ def main() -> None:
     """Run the CTI MCP server (STDIO transport by default)."""
     import sys
     transport = "stdio"
-    for arg in sys.argv[1:]:
+    # Flexible parsing for 'http' or '--transport=http' or '--transport http'
+    if "http" in sys.argv:
+        transport = "http"
+    for i, arg in enumerate(sys.argv):
+        if arg == "--transport" and i + 1 < len(sys.argv):
+            transport = sys.argv[i+1]
         if arg.startswith("--transport="):
             transport = arg.split("=", 1)[1]
 
@@ -1666,11 +1669,8 @@ def main() -> None:
     # Start background warmup thread
     warmup_thread = threading.Thread(target=_warmup, daemon=True)
     warmup_thread.start()
-
     if transport == "http":
-        logger.info("HTTP mode: %s:%d (auth=%s)",
-                    config.MCP_HTTP_HOST, config.MCP_HTTP_PORT,
-                    "enabled" if config.is_http_auth_enabled() else "disabled")
+        print(f"DEBUG: HTTP mode starting on {config.MCP_HTTP_HOST}:{config.MCP_HTTP_PORT}")
         
         # Bypass FastMCP DNS Rebinding Protection for Docker/Public access
         if hasattr(mcp, "settings") and hasattr(mcp.settings, "allowed_origins"):
@@ -1681,40 +1681,40 @@ def main() -> None:
                 "http://45.63.121.92:5173",
                 "*"
             ])
-            logger.info("Updated FastMCP allowed_origins: %s", mcp.settings.allowed_origins)
+            print(f"DEBUG: Updated FastMCP allowed_origins: {mcp.settings.allowed_origins}")
         
-        # Inject Logging Middleware and BUGS FIX for FastMCP 1.26.0+
-        # Fix: Initial GET requests for SSE shouldn't require Mcp-Session-Id header
+        # Inject Logging Middleware and BUGS FIX for FastMCP
+        # This patch fixes the "Missing session ID" error on initial GET requests
         try:
             import mcp.server.streamable_http as streamable_http
-            original_validate_session = streamable_http.StreamableHTTP._validate_session
+            
+            # More robust monkey-patch of the class method
+            old_validate_session = streamable_http.StreamableHTTP._validate_session
             
             async def patched_validate_session(self, request, send):
-                # If it's a GET request (SSE initiation), we bypass the session ID check 
-                # because the client doesn't have it yet!
-                if request.method == "GET":
+                # If it's a GET request (SSE initiation), we bypass the session ID check
+                path = request.url.path
+                if request.method == "GET" and (path == "/mcp" or path == "/sse" or path == "/"):
                     return True
-                return await original_validate_session(self, request, send)
+                return await old_validate_session(self, request, send)
             
             streamable_http.StreamableHTTP._validate_session = patched_validate_session
-            logger.info("Applied monkey-patch to FastMCP StreamableHTTP session validation")
+            print("DEBUG: Successfully applied patch to StreamableHTTP._validate_session")
             
             from starlette.middleware.base import BaseHTTPMiddleware
             class HeaderLoggerMiddleware(BaseHTTPMiddleware):
                 async def dispatch(self, request, call_next):
-                    logger.info("INCOMING: %s %s | Headers: %s", 
-                                request.method, request.url.path, dict(request.headers))
+                    print(f"INCOMING: {request.method} {request.url.path}")
                     response = await call_next(request)
-                    logger.info("OUTGOING: Status %d", response.status_code)
                     return response
             
             # Use getattr to safely check for the app attribute
             app = getattr(mcp, "_fastapi_app", None) or getattr(mcp, "_app", None)
             if app:
                 app.add_middleware(HeaderLoggerMiddleware)
-                logger.info("Applied HeaderLoggerMiddleware to FastMCP")
+                print("DEBUG: Applied HeaderLoggerMiddleware")
         except Exception as e:
-            logger.error("Failed to apply patches/middleware: %s", e)
+            print(f"ERROR applying patches: {e}")
 
         mcp.run(transport="streamable-http",
                 host=config.MCP_HTTP_HOST,
