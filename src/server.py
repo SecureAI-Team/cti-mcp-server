@@ -1683,8 +1683,22 @@ def main() -> None:
             ])
             logger.info("Updated FastMCP allowed_origins: %s", mcp.settings.allowed_origins)
         
-        # Inject Logging Middleware to see exact incoming headers causing 400/403
+        # Inject Logging Middleware and BUGS FIX for FastMCP 1.26.0+
+        # Fix: Initial GET requests for SSE shouldn't require Mcp-Session-Id header
         try:
+            import mcp.server.streamable_http as streamable_http
+            original_validate_session = streamable_http.StreamableHTTP._validate_session
+            
+            async def patched_validate_session(self, request, send):
+                # If it's a GET request (SSE initiation), we bypass the session ID check 
+                # because the client doesn't have it yet!
+                if request.method == "GET":
+                    return True
+                return await original_validate_session(self, request, send)
+            
+            streamable_http.StreamableHTTP._validate_session = patched_validate_session
+            logger.info("Applied monkey-patch to FastMCP StreamableHTTP session validation")
+            
             from starlette.middleware.base import BaseHTTPMiddleware
             class HeaderLoggerMiddleware(BaseHTTPMiddleware):
                 async def dispatch(self, request, call_next):
@@ -1700,7 +1714,7 @@ def main() -> None:
                 app.add_middleware(HeaderLoggerMiddleware)
                 logger.info("Applied HeaderLoggerMiddleware to FastMCP")
         except Exception as e:
-            logger.error("Failed to apply logging middleware: %s", e)
+            logger.error("Failed to apply patches/middleware: %s", e)
 
         mcp.run(transport="streamable-http",
                 host=config.MCP_HTTP_HOST,
