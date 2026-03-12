@@ -122,12 +122,18 @@
                     'Accept': 'text/event-stream'
                 }
             }).then(response => {
-                if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                if (!response.ok) {
+                    const errorDetails = `HTTP ${response.status}: ${response.statusText}`;
+                    appendLog(`Connection failed (Fetch): ${errorDetails}`, true);
+                    console.error("Full fetch response error:", response);
+                    throw new Error(errorDetails);
+                }
                 
                 statusEl.textContent = 'Connected';
                 statusEl.className = 'status connected';
                 connectBtn.textContent = 'Disconnect';
                 appendLog('SSE Stream established.');
+                console.log("Response headers from SSE:", [...response.headers.entries()]);
 
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
@@ -153,6 +159,7 @@
                             if (line.startsWith('endpoint:')) {
                                 postEndpoint = line.substring(9).trim();
                                 appendLog(`POST Endpoint received: ${postEndpoint}`);
+                                console.log("New POST endpoint:", postEndpoint);
                                 sendBtn.disabled = false;
                                 
                                 // Auto load capabilities
@@ -162,7 +169,9 @@
                                 }, 500);
                             } else if (line.startsWith('data:')) {
                                 try {
-                                    const data = JSON.parse(line.substring(5).trim());
+                                    const dataLine = line.substring(5).trim();
+                                    console.log("Raw SSE data chunk:", dataLine);
+                                    const data = JSON.parse(dataLine);
                                     appendLog(`Message Received:\n${JSON.stringify(data, null, 2)}`);
                                     
                                     // Handle list responses
@@ -173,6 +182,7 @@
                                         renderPrompts(data.result.prompts);
                                     }
                                 } catch (e) {
+                                    console.warn("Partial JSON on stream:", e);
                                     // Ignore parse errors for split chunks
                                 }
                             }
@@ -180,6 +190,7 @@
                         readStream();
                     }).catch(err => {
                         appendLog(`Stream Error: ${err.message}`, true);
+                        console.error("Detailed Stream Error:", err);
                         statusEl.textContent = 'Disconnected';
                         statusEl.className = 'status disconnected';
                     });
@@ -191,6 +202,7 @@
                 statusEl.textContent = 'Disconnected';
                 statusEl.className = 'status disconnected';
                 appendLog(`Connection failed: ${err.message}`, true);
+                console.error("Final catch error:", err);
             });
         });
 

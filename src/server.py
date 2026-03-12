@@ -1682,6 +1682,25 @@ def main() -> None:
                 "*"
             ])
             logger.info("Updated FastMCP allowed_origins: %s", mcp.settings.allowed_origins)
+        
+        # Inject Logging Middleware to see exact incoming headers causing 400/403
+        try:
+            from starlette.middleware.base import BaseHTTPMiddleware
+            class HeaderLoggerMiddleware(BaseHTTPMiddleware):
+                async def dispatch(self, request, call_next):
+                    logger.info("INCOMING: %s %s | Headers: %s", 
+                                request.method, request.url.path, dict(request.headers))
+                    response = await call_next(request)
+                    logger.info("OUTGOING: Status %d", response.status_code)
+                    return response
+            
+            # Use getattr to safely check for the app attribute
+            app = getattr(mcp, "_fastapi_app", None) or getattr(mcp, "_app", None)
+            if app:
+                app.add_middleware(HeaderLoggerMiddleware)
+                logger.info("Applied HeaderLoggerMiddleware to FastMCP")
+        except Exception as e:
+            logger.error("Failed to apply logging middleware: %s", e)
 
         mcp.run(transport="streamable-http",
                 host=config.MCP_HTTP_HOST,
