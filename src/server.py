@@ -1582,6 +1582,7 @@ async def ot_ics_compromise_investigation(
         f"   - Potential threat actors known to use these TTPs\n"
         f"   - Immediate containment steps (OT-safe, network-aware)\n"
         f"   - Evidence to collect for forensic analysis\n"
+    )
     return [PromptMessage(role="user", content=TextContent(type="text", text=prompt_text))]
 
 
