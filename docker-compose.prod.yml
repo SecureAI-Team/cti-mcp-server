@@ -16,7 +16,7 @@ services:
       - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-} # Strongly recommended to set this in prod
       # Integrations (API keys loaded via .env)
       - OTX_API_KEY=${OTX_API_KEY:-}
-      - VT_API_KEY=${VT_API_KEY:-}
+      - VIRUSTOTAL_API_KEY=${VIRUSTOTAL_API_KEY:-}
     volumes:
       - mitre_cache:/app/.mitre_cache
       - ./logs:/app/logs
