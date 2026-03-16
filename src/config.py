@@ -19,7 +19,7 @@ def _get_bool(key: str, default: bool = False) -> bool:
 
 class Config:
     # ── API Keys ──────────────────────────────────────────────
-    VIRUSTOTAL_API_KEY: str = os.getenv("VIRUSTOTAL_API_KEY", "")
+    VIRUSTOTAL_API_KEY: str = os.getenv("VIRUSTOTAL_API_KEY", os.getenv("VT_API_KEY", ""))
     OTX_API_KEY: str = os.getenv("OTX_API_KEY", "")
     NVD_API_KEY: str = os.getenv("NVD_API_KEY", "")
 
