@@ -1,6 +1,7 @@
 """
 NIST NVD CVE API v2.0 connector.
 Completely free, no API key required (key raises rate limits).
+Enhanced with circuit breaker and rate limiting for production resilience.
 """
 
 import logging
@@ -10,10 +11,14 @@ from typing import Any
 import httpx
 
 from ..cache import cached
+from ..circuit_breaker import get_breaker
 from ..config import config
 from ..models import CPEMatch, CVEResult, CVSSScore, Severity
+from ..ratelimit import check_rate_limit
 
 logger = logging.getLogger(__name__)
+
+_CB = get_breaker("nvd")
 
 
 def _map_severity(s: str) -> Severity:
@@ -35,8 +40,11 @@ class CVEConnector:
             self._headers["apiKey"] = config.NVD_API_KEY
 
     async def _get(self, params: dict[str, Any]) -> dict[str, Any] | None:
-        async with httpx.AsyncClient(timeout=config.HTTP_TIMEOUT) as client:
-            try:
+        if not await check_rate_limit("nvd"):
+            raise RuntimeError("NVD rate limit exceeded. Please wait before retrying.")
+
+        async def _do_request() -> dict[str, Any] | None:
+            async with httpx.AsyncClient(timeout=config.HTTP_TIMEOUT) as client:
                 resp = await client.get(
                     config.NVD_BASE_URL, params=params, headers=self._headers
                 )
@@ -44,12 +52,17 @@ class CVEConnector:
                     return None
                 resp.raise_for_status()
                 return resp.json()
-            except httpx.HTTPStatusError as exc:
-                logger.warning("NVD HTTP error %s: %s", exc.response.status_code, exc)
-                return None
-            except Exception as exc:
-                logger.error("NVD request failed: %s", exc)
-                return None
+
+        try:
+            return await _CB.call(_do_request)
+        except RuntimeError:
+            raise
+        except httpx.HTTPStatusError as exc:
+            logger.warning("NVD HTTP error %s: %s", exc.response.status_code, exc)
+            return None
+        except Exception as exc:
+            logger.error("NVD request failed: %s", exc)
+            return None
 
     @cached
     async def lookup_cve(self, cve_id: str) -> CVEResult | None:

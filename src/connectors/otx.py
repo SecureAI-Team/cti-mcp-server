@@ -5,7 +5,7 @@ Enhanced with: circuit breaker, exponential-backoff retry, rate limiting.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -141,7 +141,10 @@ class OTXConnector:
             if not s:
                 return None
             try:
-                return datetime.fromisoformat(s.replace("Z", "+00:00"))
+                dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
             except ValueError:
                 return None
 

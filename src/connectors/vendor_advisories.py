@@ -213,14 +213,17 @@ def _truncate(s: str, max_len: int = 400) -> str:
 
 
 def _parse_dt(s: Any) -> datetime | None:
-    """Parse feedparser time_struct or ISO string to datetime."""
+    """Parse feedparser time_struct or ISO string to timezone-aware UTC datetime."""
     if s is None:
         return None
     try:
         if hasattr(s, "tm_year"):
             import calendar
             return datetime.fromtimestamp(calendar.timegm(s), tz=timezone.utc)
-        return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     except Exception:
         return None
 
@@ -338,19 +341,23 @@ class VendorAdvisoryConnector:
     async def _fetch_vendor(
         self, vc: _VendorConfig, limit: int
     ) -> list[VendorAdvisory]:
-        """Fetch advisories for one vendor, using cache."""
+        """Fetch advisories for one vendor, using cache and circuit breaker."""
         cache_key = f"{vc.name}:{limit}"
         cached = _cache_get(cache_key)
         if cached is not None:
             return cached
 
-        try:
+        async def _do_fetch() -> list[VendorAdvisory]:
             if vc.feed_url:
-                results = await self._fetch_rss(vc, limit)
-            else:
-                results = await self._fetch_nvd_fallback(vc, limit)
+                return await self._fetch_rss(vc, limit)
+            return await self._fetch_nvd_fallback(vc, limit)
+
+        try:
+            results = await self._breaker.call(_do_fetch)
             _cache_set(cache_key, results)
             return results
+        except RuntimeError:
+            raise
         except Exception as exc:
             logger.warning("VendorAdvisory fetch failed for %s: %s", vc.name, exc)
             return []
@@ -362,7 +369,10 @@ class VendorAdvisoryConnector:
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
             resp = await client.get(
                 vc.feed_url,
-                headers={"User-Agent": "CTI-MCP-Server/2.0 SecurityResearch"},
+                headers={
+                    "User-Agent": "CTI-MCP-Server/2.0 SecurityResearch",
+                    "Accept-Language": "en-US,en;q=0.9",
+                },
             )
             resp.raise_for_status()
             content = resp.text
@@ -420,9 +430,10 @@ class VendorAdvisoryConnector:
             cve = item.get("cve", {})
             cve_id = cve.get("id", "")
 
-            # Description
             descs = cve.get("descriptions", [])
-            desc = next((d["value"] for d in descs if d.get("lang") == "en"), "")
+            desc = next((d["value"] for d in descs if d.get("lang", "").startswith("en")), None)
+            if desc is None:
+                continue
 
             # CVSS severity
             metrics = cve.get("metrics", {})

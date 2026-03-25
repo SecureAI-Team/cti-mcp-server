@@ -233,3 +233,68 @@ class ServiceStatus(BaseModel):
     version: str = "0.1.0"
     data_sources: list[DataSourceStatus]
     cache_ttl_seconds: int
+
+
+# ── Risk Scoring ──────────────────────────────────────────────────────────────
+
+class RiskScoreBreakdown(BaseModel):
+    """Individual component of the composite risk score."""
+    component: str
+    score: float
+    max_score: float
+    detail: str
+
+
+class RiskScore(BaseModel):
+    """Composite risk score combining CVSS, EPSS, KEV, vendor advisory, and threat intel."""
+    total_score: float = 0.0
+    max_score: float = 100.0
+    rating: str = "UNKNOWN"  # CRITICAL / HIGH / MEDIUM / LOW / INFO / UNKNOWN
+    breakdown: list[RiskScoreBreakdown] = Field(default_factory=list)
+    recommendation: str = ""
+
+
+# ── Correlation ───────────────────────────────────────────────────────────────
+
+class CorrelationResult(BaseModel):
+    """Unified cross-source intelligence correlation result."""
+    input_type: str  # "cve" | "technique" | "ioc"
+    input_value: str
+
+    cve: dict[str, Any] | None = None
+    epss: dict[str, Any] | None = None
+    kev: dict[str, Any] | None = None
+    mitre_techniques: list[dict[str, Any]] = Field(default_factory=list)
+    d3fend_defenses: list[dict[str, Any]] = Field(default_factory=list)
+    vendor_advisories: list[dict[str, Any]] = Field(default_factory=list)
+    otx_pulses: list[dict[str, Any]] = Field(default_factory=list)
+    ioc: dict[str, Any] | None = None
+
+    related_cves: list[str] = Field(default_factory=list)
+    cwe_ids: list[str] = Field(default_factory=list)
+    risk_score: RiskScore | None = None
+    sources_consulted: list[str] = Field(default_factory=list)
+    sources_failed: list[str] = Field(default_factory=list)
+
+
+# ── Threat Landscape ──────────────────────────────────────────────────────────
+
+class ThreatLandscapeItem(BaseModel):
+    """A single item in the threat landscape summary."""
+    category: str  # "cve" | "kev" | "vendor_advisory" | "ics_advisory"
+    title: str
+    severity: str | None = None
+    detail: str = ""
+    url: str = ""
+    published: str | None = None
+
+
+class ThreatLandscape(BaseModel):
+    """Aggregated threat landscape snapshot."""
+    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    category_filter: str | None = None
+    top_cves: list[ThreatLandscapeItem] = Field(default_factory=list)
+    recent_kev_additions: list[ThreatLandscapeItem] = Field(default_factory=list)
+    vendor_advisories: list[ThreatLandscapeItem] = Field(default_factory=list)
+    ics_advisories: list[ThreatLandscapeItem] = Field(default_factory=list)
+    summary: str = ""

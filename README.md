@@ -6,6 +6,22 @@
 
 ## 🗂️ 能力全览
 
+### 🧠 跨源情报关联 & 风险评估（核心差异化能力）
+
+| Tool | 功能描述 | 数据源 |
+|---|---|---|
+| `correlate_threat` | **跨源情报关联引擎**：输入任意 CVE/MITRE 技术/IOC，自动扇出查询全部数据源，返回统一情报画像 + 风险评分 | NVD + EPSS + KEV + MITRE + D3FEND + OTX + 厂商公告 |
+| `get_risk_card` | **复合风险评分卡**：加权评估 CVSS(25%) + EPSS(30%) + KEV(20%) + 厂商公告(10%) + 威胁情报(15%)，输出 0-100 评分及修补建议 | NVD + EPSS + KEV + OTX + 厂商公告 |
+| `get_threat_landscape` | **威胁态势快照**：聚合全源数据回答"当前正在发生什么"，按 IT/OT/AI 分类输出态势感知简报 | NVD + KEV + 厂商公告 + CISA ICS |
+
+### ⚡ 批量操作（SOC 工作流加速）
+
+| Tool | 功能描述 |
+|---|---|
+| `batch_lookup_iocs` | 并发批量 IOC 研判（最多 20 条），5 并发信号量控制，适用于 SIEM 告警队列 |
+| `batch_enrich_cves` | 批量 CVE 富化（EPSS + KEV + 风险评分），自动按风险排序输出优先级列表 |
+| `batch_vendor_check` | 批量检查 CVE 是否有厂商安全公告，支持按厂商过滤 |
+
 ### 🔍 IOC 威胁情报（需 API Key）
 
 | Tool | 功能描述 | 数据源 |
@@ -69,7 +85,7 @@
 
 ### 💬 业务场景 Prompts（指导 AI 工作流）
 
-本服务内置原生 MCP Prompts，引导大模型按标准流程进行深度安全研判，覆盖三大业务主线：
+本服务内置原生 MCP Prompts，引导大模型按标准流程进行深度安全研判，覆盖四大业务主线：
 
 | 领域 | Prompt Name | 场景描述 |
 |---|---|---|
@@ -81,6 +97,8 @@
 | **OT 工业** | `ot_ics_compromise_investigation` | 应急响应：OT 异常现象 → 关联 ICS 专属 TTPs 及 CVE → 输出响应 Playbook |
 | **AI LLM** | `ai_llm_deployment_security_review`| 上线评估：结合 OWASP LLM / ATLAS 与框架漏洞的投产前 Go/No-Go 安全审查 |
 | **AI LLM** | `ai_vendor_security_posture` | 供应商尽调：AI 厂商历史漏洞/安全公告回顾，输出供应商安全概况评分卡 |
+| **跨源智能** | `vulnerability_triage_briefing` | **漏洞研判简报**：批量 CVE 风险评分 + 优先级分层修补计划 |
+| **跨源智能** | `morning_threat_briefing` | **每日威胁简报**：聚合全源数据生成高管级态势感知日报 |
 
 ---
 
@@ -98,6 +116,7 @@
 | `cti://ai/owasp-llm-top10` | OWASP LLM Top 10 完整文档（2025）|
 | `cti://ai/frameworks` | AI 框架 CVE 查询关键词映射表 |
 | `cti://vendors/advisory-sources`| 13 家主流 IT/OT/AI 厂商安全公告数据源状态表 |
+| `cti://cwe-attack-map` | CWE → MITRE ATT&CK 技术映射表（关联引擎内部使用）|
 
 ---
 
@@ -276,9 +295,12 @@ async with streamablehttp_client("http://localhost:8080/mcp") as (read, write, _
 ### 性能特性
 
 - **并发查询** — `lookup_ioc` 同时查询 VT + OTX，延迟约减少 50%
+- **跨源并行扇出** — `correlate_threat` 使用 `asyncio.gather` 最大化并行查询全部数据源
+- **批量操作** — `batch_*` 工具使用信号量控制并发（5 并发），批量 20 条 IOC/CVE 无压力
 - **TTL 缓存** — 默认 5 分钟缓存，防止重复查询消耗配额
 - **启动预热** — 服务启动后后台异步加载 MITRE 本地数据，首次调用无等待
 - **指数退避重试** — 对 429/5xx 响应最多重试 3 次
+- **全源熔断保护** — NVD、VT、OTX、厂商公告连接器均已接入熔断器 + 速率限制
 
 ---
 
@@ -301,9 +323,11 @@ python tests/test_business_scenarios.py
 ```
 cti/
 ├── src/
-│   ├── server.py               # FastMCP 主入口（20 Tools + 8 Prompts + 10 Resources）
+│   ├── server.py               # FastMCP 主入口（33 Tools + 10 Prompts + 11 Resources）
+│   ├── correlation.py          # 跨源情报关联引擎 + CWE→ATT&CK 映射桥
+│   ├── risk_scoring.py         # 复合风险评分引擎（CVSS+EPSS+KEV+厂商+情报 加权）
 │   ├── config.py               # 配置管理（速率/认证/审计）
-│   ├── models.py               # Pydantic 数据模型
+│   ├── models.py               # Pydantic 数据模型（含 CorrelationResult, RiskScore 等）
 │   ├── cache.py                # TTL 内存缓存
 │   ├── validators.py           # 输入验证 + SSRF 防护
 │   ├── ratelimit.py            # 令牌桶速率限制
@@ -312,12 +336,16 @@ cti/
 │   └── connectors/
 │       ├── virustotal.py       # VirusTotal v3（熔断器+重试）
 │       ├── otx.py              # AlienVault OTX（熔断器+重试）
+│       ├── cve.py              # NIST NVD CVE API v2.0（熔断器+速率限制）
 │       ├── mitre_attack.py     # MITRE ATT&CK Enterprise（本地 STIX）
 │       ├── mitre_ics.py        # MITRE ATT&CK for ICS（本地 STIX）
 │       ├── mitre_atlas.py      # MITRE ATLAS（AI 威胁，本地 YAML）
+│       ├── mitre_d3fend.py     # MITRE D3FEND 防御映射
 │       ├── cisa_ics.py         # CISA ICS Advisories（RSS）
-│       ├── vendor_advisories.py# 13 家主流厂商 IT/OT/AI 官方安全公告 (RSS/NVD)
-│       └── cve.py              # NIST NVD CVE API v2.0
+│       ├── vendor_advisories.py# 13 家主流厂商 IT/OT/AI 安全公告（RSS/NVD，熔断器保护）
+│       ├── threat_intel.py     # CISA KEV + EPSS
+│       ├── osv.py              # OSV 开源漏洞库
+│       └── mac_oui.py          # IEEE MAC OUI 厂商查询
 ├── tests/
 │   ├── test_server.py          # 单元测试（63 tests）
 │   └── test_business_scenarios.py  # 业务场景集成测试
@@ -332,6 +360,32 @@ cti/
 ---
 
 ## 💡 典型使用示例
+
+### 跨源情报关联（核心能力）
+
+```
+# 一条命令完成全源关联：CVE → NVD → EPSS → KEV → CWE→ATT&CK → D3FEND → 厂商公告 → OTX → 风险评分
+correlate_threat input_value="CVE-2024-3400" input_type="cve"
+
+# 生成复合风险评分卡（CVSS 25% + EPSS 30% + KEV 20% + 厂商 10% + 情报 15%）
+get_risk_card cve_id="CVE-2021-44228"
+
+# 当前威胁态势快照
+get_threat_landscape category="ot" limit=15
+```
+
+### 批量操作（SOC 工作流）
+
+```
+# 批量 IOC 研判（SIEM 告警队列）
+batch_lookup_iocs indicators=[{"value":"185.220.101.45","type":"ip"},{"value":"evil.com","type":"domain"}]
+
+# 批量 CVE 富化 + 自动按风险排序
+batch_enrich_cves cve_ids=["CVE-2024-3400","CVE-2021-44228","CVE-2023-4966"]
+
+# 批量检查哪些 CVE 已有厂商补丁指导
+batch_vendor_check cve_ids=["CVE-2024-3400","CVE-2023-4966"] vendor="cisco"
+```
 
 ### IT 安全运营
 

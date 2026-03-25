@@ -6,6 +6,7 @@ v2: ICS/OT tools, input validation, audit logging, concurrent queries, circuit b
 import asyncio
 import logging
 import threading
+from datetime import datetime
 from typing import Annotated
 
 from fastmcp import FastMCP
@@ -28,6 +29,7 @@ from .connectors.otx import OTXConnector
 from .connectors.threat_intel import ThreatIntelConnector
 from .connectors.vendor_advisories import VendorAdvisoryConnector, VENDOR_REGISTRY
 from .connectors.virustotal import VirusTotalConnector
+from .correlation import CorrelationEngine, CWE_TO_ATTACK_MAP, get_techniques_for_cwes
 from .models import (
     DataSourceStatus,
     IOCResult,
@@ -35,6 +37,7 @@ from .models import (
     ServiceStatus,
 )
 from .ratelimit import get_rate_limit_status
+from .risk_scoring import compute_risk_score
 from .validators import (
     ValidationError,
     sanitize_error,
@@ -75,6 +78,15 @@ _mac = MacOUIConnector()
 _osv = OSVConnector()
 _d3fend = MitreD3fendConnector()
 _vendor_adv = VendorAdvisoryConnector()
+
+_correlator = CorrelationEngine(
+    cve_conn=_cve,
+    intel_conn=_intel,
+    mitre_conn=_mitre,
+    d3fend_conn=_d3fend,
+    otx_conn=_otx,
+    vendor_adv_conn=_vendor_adv,
+)
 
 
 # ── Startup warmup (background thread) ───────────────────────────────────────
@@ -1428,6 +1440,429 @@ async def resource_vendor_advisory_sources() -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# TOOLS — CROSS-INTELLIGENCE CORRELATION & RISK SCORING
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def correlate_threat(
+    input_value: Annotated[str, Field(
+        description="CVE ID (e.g. 'CVE-2024-3400'), MITRE technique ID (e.g. 'T1059'), or IOC value"
+    )],
+    input_type: Annotated[str, Field(
+        description="Type of input: 'cve', 'technique', or IOC type ('ip', 'domain', 'url', 'hash')"
+    )] = "cve",
+) -> dict:
+    """
+    Cross-source threat intelligence correlation.
+
+    Given a single indicator, automatically fans out to ALL relevant data sources
+    in parallel and assembles a unified intelligence picture with composite risk scoring.
+
+    For CVE inputs: NVD → EPSS → CISA KEV → CWE-to-ATT&CK bridge → MITRE techniques
+    → D3FEND defenses → Vendor Advisories → OTX pulses → Composite Risk Score.
+
+    For technique inputs: MITRE details → D3FEND countermeasures → OTX pulses.
+
+    For IOC inputs: OTX context + pulse search → threat scoring.
+
+    Examples:
+    - input_value="CVE-2024-3400", input_type="cve"
+    - input_value="T1059", input_type="technique"
+    - input_value="185.220.101.45", input_type="ip"
+    """
+    input_type_lower = input_type.lower().strip()
+
+    with AuditTimer("correlate_threat", input_type=input_type_lower) as t:
+        try:
+            if input_type_lower == "cve":
+                input_value = validate_cve_id(input_value)
+                result = await _correlator.correlate_cve(input_value)
+            elif input_type_lower == "technique":
+                input_value = validate_technique_id(input_value)
+                result = await _correlator.correlate_technique(input_value)
+            elif input_type_lower in ("ip", "domain", "url", "hash"):
+                input_value = validate_ioc(input_value, input_type_lower)
+                result = await _correlator.correlate_ioc(input_value, input_type_lower)
+            else:
+                return {"error": f"Unsupported input_type '{input_type}'. Use 'cve', 'technique', 'ip', 'domain', 'url', or 'hash'."}
+
+            t.finish(sources=len(result.sources_consulted))
+            return result.model_dump(mode="json")
+        except ValidationError as exc:
+            return {"error": str(exc)}
+        except Exception as exc:
+            logger.error("correlate_threat failed: %s", exc)
+            return {"error": sanitize_error(exc)}
+
+
+@mcp.tool()
+async def get_risk_card(
+    cve_id: Annotated[str, Field(description="CVE ID to generate a risk card for (e.g. 'CVE-2024-3400')")],
+) -> dict:
+    """
+    Generate a composite risk scorecard for a CVE.
+
+    Combines CVSS base score (25%), EPSS exploitation probability (30%),
+    CISA KEV active exploitation status (20%), vendor advisory urgency (10%),
+    and OTX threat intelligence interest (15%) into a single 0-100 risk score
+    with actionable patch prioritization recommendation.
+
+    This goes beyond raw CVSS to provide real-world risk-based prioritization.
+    """
+    try:
+        cve_id = validate_cve_id(cve_id)
+    except ValidationError as exc:
+        return {"error": str(exc)}
+
+    with AuditTimer("get_risk_card") as t:
+        cve_data, epss_data, kev_catalog = await asyncio.gather(
+            _cve.lookup_cve(cve_id),
+            _intel.get_epss(cve_id),
+            _intel.get_cisa_kev(),
+        )
+
+        cvss_base = cve_data.highest_cvss_score if cve_data else None
+        epss_val = epss_data.epss if epss_data else None
+
+        in_kev = False
+        kev_due = None
+        if kev_catalog:
+            kev_entry = kev_catalog.get(cve_id)
+            if kev_entry:
+                in_kev = True
+
+        # Check vendor advisories
+        vendor_results = await _vendor_adv.search(cve_id=cve_id, limit=5)
+        vendor_count = len(vendor_results)
+        newest_age = None
+        if vendor_results:
+            from datetime import timezone as _tz
+            now = datetime.now(tz=_tz.utc)
+            for adv in vendor_results:
+                if adv.published:
+                    pub = adv.published if adv.published.tzinfo else adv.published.replace(tzinfo=_tz.utc)
+                    age = (now - pub).total_seconds() / 86400
+                    if newest_age is None or age < newest_age:
+                        newest_age = age
+
+        # Check OTX
+        otx_count = 0
+        if _otx.enabled:
+            try:
+                pulses = await _otx.search_pulses(cve_id, limit=10)
+                otx_count = len(pulses)
+            except Exception:
+                pass
+
+        score = compute_risk_score(
+            cvss_base=cvss_base,
+            epss_score=epss_val,
+            in_kev=in_kev,
+            kev_due_date=kev_due,
+            vendor_advisory_count=vendor_count,
+            newest_advisory_age_days=newest_age,
+            otx_pulse_count=otx_count,
+        )
+
+        t.finish(score=score.total_score, rating=score.rating)
+
+        return {
+            "cve_id": cve_id,
+            "risk_score": score.model_dump(mode="json"),
+            "inputs": {
+                "cvss_base": cvss_base,
+                "epss_score": epss_val,
+                "in_kev": in_kev,
+                "vendor_advisory_count": vendor_count,
+                "otx_pulse_count": otx_count,
+            },
+        }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOLS — BATCH OPERATIONS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def batch_lookup_iocs(
+    indicators: Annotated[list[dict], Field(
+        description=(
+            "List of IOC objects, each with 'value' and 'type' keys. "
+            "Example: [{'value': '8.8.8.8', 'type': 'ip'}, {'value': 'evil.com', 'type': 'domain'}]. "
+            "Max 20 indicators per batch."
+        )
+    )],
+) -> dict:
+    """
+    Batch IOC triage — look up multiple indicators in parallel.
+    Ideal for SOC alert queues where a single SIEM event may contain many IOCs.
+    Returns aggregated verdicts for all indicators with controlled concurrency.
+    Max 20 indicators per batch.
+    """
+    if not indicators or not isinstance(indicators, list):
+        return {"error": "indicators must be a non-empty list of {value, type} objects"}
+    if len(indicators) > 20:
+        return {"error": "Maximum 20 indicators per batch"}
+
+    with AuditTimer("batch_lookup_iocs") as t:
+        sem = asyncio.Semaphore(5)
+
+        async def _lookup_one(item: dict) -> dict:
+            val = item.get("value", "")
+            typ = item.get("type", "")
+            if not val or not typ:
+                return {"value": val, "type": typ, "error": "Missing value or type"}
+            async with sem:
+                try:
+                    return await lookup_ioc(indicator=val, ioc_type=typ)
+                except Exception as exc:
+                    return {"value": val, "type": typ, "error": str(exc)}
+
+        results = await asyncio.gather(*[_lookup_one(i) for i in indicators])
+        t.finish(count=len(results))
+
+        malicious = sum(1 for r in results if r.get("verdict") == "malicious")
+        suspicious = sum(1 for r in results if r.get("verdict") == "suspicious")
+
+        return {
+            "total": len(results),
+            "malicious_count": malicious,
+            "suspicious_count": suspicious,
+            "results": list(results),
+        }
+
+
+@mcp.tool()
+async def batch_enrich_cves(
+    cve_ids: Annotated[list[str], Field(
+        description="List of CVE IDs to enrich. Example: ['CVE-2024-3400', 'CVE-2021-44228']. Max 20."
+    )],
+) -> dict:
+    """
+    Batch CVE enrichment — enrich multiple CVEs with EPSS scores, CISA KEV status,
+    and composite risk scores in parallel.
+    Ideal for vulnerability scan triage where a scanner outputs dozens of CVEs.
+    Results are sorted by risk score (highest first) for immediate prioritization.
+    Max 20 CVEs per batch.
+    """
+    if not cve_ids or not isinstance(cve_ids, list):
+        return {"error": "cve_ids must be a non-empty list of CVE ID strings"}
+    if len(cve_ids) > 20:
+        return {"error": "Maximum 20 CVEs per batch"}
+
+    with AuditTimer("batch_enrich_cves") as t:
+        sem = asyncio.Semaphore(5)
+
+        async def _enrich_one(cve_id: str) -> dict:
+            async with sem:
+                try:
+                    cve_id = validate_cve_id(cve_id)
+                    card = await get_risk_card(cve_id=cve_id)
+                    return card
+                except Exception as exc:
+                    return {"cve_id": cve_id, "error": str(exc)}
+
+        results = await asyncio.gather(*[_enrich_one(c) for c in cve_ids])
+        results_list = list(results)
+
+        results_list.sort(
+            key=lambda r: r.get("risk_score", {}).get("total_score", 0),
+            reverse=True,
+        )
+
+        t.finish(count=len(results_list))
+
+        return {
+            "total": len(results_list),
+            "results": results_list,
+        }
+
+
+@mcp.tool()
+async def batch_vendor_check(
+    cve_ids: Annotated[list[str], Field(
+        description="List of CVE IDs to check against vendor advisories. Max 20."
+    )],
+    vendor: Annotated[str | None, Field(
+        description="Optional vendor name to filter advisories (e.g. 'microsoft', 'cisco')"
+    )] = None,
+) -> dict:
+    """
+    Check which CVEs have published vendor security advisories.
+    Useful for patch management: quickly identify which CVEs from a vulnerability scan
+    already have official vendor guidance available.
+    Max 20 CVEs per batch.
+    """
+    if not cve_ids or not isinstance(cve_ids, list):
+        return {"error": "cve_ids must be a non-empty list of CVE ID strings"}
+    if len(cve_ids) > 20:
+        return {"error": "Maximum 20 CVEs per batch"}
+
+    with AuditTimer("batch_vendor_check") as t:
+        results: list[dict] = []
+        with_advisory = 0
+
+        for cve_id in cve_ids:
+            try:
+                cve_id = validate_cve_id(cve_id)
+            except ValidationError:
+                results.append({"cve_id": cve_id, "error": "Invalid CVE ID format"})
+                continue
+
+            advisories = await _vendor_adv.search(
+                vendor=vendor, cve_id=cve_id, limit=5
+            )
+            has_adv = len(advisories) > 0
+            if has_adv:
+                with_advisory += 1
+
+            results.append({
+                "cve_id": cve_id,
+                "has_vendor_advisory": has_adv,
+                "advisory_count": len(advisories),
+                "advisories": [
+                    {
+                        "vendor": a.vendor_display,
+                        "title": a.title,
+                        "severity": a.severity,
+                        "url": a.url,
+                    }
+                    for a in advisories
+                ],
+            })
+
+        t.finish(count=len(results), with_advisory=with_advisory)
+
+        return {
+            "total": len(results),
+            "with_advisory": with_advisory,
+            "without_advisory": len(results) - with_advisory,
+            "vendor_filter": vendor,
+            "results": results,
+        }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOLS — THREAT LANDSCAPE
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def get_threat_landscape(
+    category: Annotated[str | None, Field(
+        description="Filter by domain: 'it', 'ot', 'ai', or omit for all. Controls which vendor advisories are included."
+    )] = None,
+    limit: Annotated[int, Field(description="Max items per section (1-20)", ge=1, le=20)] = 10,
+) -> dict:
+    """
+    Aggregated threat landscape snapshot — what's happening right now.
+
+    Combines data from multiple sources to produce a situational awareness briefing:
+    - Recent high-severity CVEs (from NVD)
+    - New CISA KEV additions (confirmed in-the-wild exploitation)
+    - Latest vendor security advisories (filtered by category if specified)
+    - Recent ICS/OT advisories from CISA (if category is 'ot' or unfiltered)
+
+    Ideal for morning security standup, executive briefings, or threat dashboard feeds.
+    """
+    from datetime import timezone as _tz
+
+    with AuditTimer("get_threat_landscape", category=category) as t:
+        tasks = {
+            "cves": _cve.search_cves(severity="CRITICAL", results_per_page=min(limit, 10)),
+            "kev": _intel.get_cisa_kev(),
+            "vendor": _vendor_adv.get_recent(category=category, limit=limit),
+        }
+
+        include_ics = category is None or category.lower() == "ot"
+        if include_ics:
+            tasks["ics"] = _cisa.get_recent(limit=limit)
+
+        gathered = await asyncio.gather(*tasks.values(), return_exceptions=True)
+        results_map = dict(zip(tasks.keys(), gathered))
+
+        landscape: dict = {
+            "category_filter": category,
+            "top_cves": [],
+            "recent_kev_additions": [],
+            "vendor_advisories": [],
+            "ics_advisories": [],
+        }
+
+        # Top CVEs
+        cves = results_map.get("cves")
+        if cves and not isinstance(cves, Exception):
+            for cve in cves[:limit]:
+                landscape["top_cves"].append({
+                    "cve_id": cve.cve_id,
+                    "severity": cve.highest_severity.value if cve.highest_severity else None,
+                    "cvss": cve.highest_cvss_score,
+                    "description": cve.description[:200],
+                    "published": cve.published.isoformat() if cve.published else None,
+                })
+
+        # KEV additions (most recent by date_added)
+        kev_catalog = results_map.get("kev")
+        if kev_catalog and not isinstance(kev_catalog, Exception):
+            sorted_kev = sorted(
+                kev_catalog.values(),
+                key=lambda k: k.date_added,
+                reverse=True,
+            )
+            for entry in sorted_kev[:limit]:
+                landscape["recent_kev_additions"].append({
+                    "cve_id": entry.cve_id,
+                    "vendor": entry.vendor_project,
+                    "product": entry.product,
+                    "vulnerability_name": entry.vulnerability_name,
+                    "date_added": entry.date_added,
+                    "ransomware_use": entry.known_ransomware_campaign_use,
+                })
+
+        # Vendor advisories
+        vendor = results_map.get("vendor")
+        if vendor and not isinstance(vendor, Exception):
+            for adv in vendor[:limit]:
+                landscape["vendor_advisories"].append({
+                    "vendor": adv.vendor_display,
+                    "title": adv.title,
+                    "severity": adv.severity,
+                    "published": adv.published.isoformat() if adv.published else None,
+                    "url": adv.url,
+                    "cve_ids": adv.cve_ids[:5],
+                })
+
+        # ICS advisories
+        ics = results_map.get("ics")
+        if ics and not isinstance(ics, Exception):
+            for a in ics[:limit]:
+                landscape["ics_advisories"].append(a.model_dump(mode="json"))
+
+        total_items = sum(len(v) for v in landscape.values() if isinstance(v, list))
+        t.finish(total_items=total_items)
+
+        landscape["total_items"] = total_items
+        return landscape
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RESOURCE — CWE-to-ATT&CK Mapping
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.resource("cti://cwe-attack-map")
+async def resource_cwe_attack_map() -> str:
+    """CWE-to-ATT&CK technique mapping used by the correlation engine."""
+    lines = [
+        "# CWE → MITRE ATT&CK Technique Mapping\n",
+        "Used by `correlate_threat` to automatically derive ATT&CK techniques from CVE weakness types.\n",
+        "| CWE ID | ATT&CK Techniques |",
+        "|---|---|",
+    ]
+    for cwe, techs in sorted(CWE_TO_ATTACK_MAP.items()):
+        lines.append(f"| {cwe} | {', '.join(techs)} |")
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # PROMPTS
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1643,6 +2078,72 @@ async def ai_vendor_security_posture(
         f"   - Key security risks in using their service\n"
         f"   - Recommended contractual security requirements\n"
         f"   - Suggested monitoring and contingency plans (vendor lock-in / outage risk)"
+    )
+    return [PromptMessage(role="user", content=TextContent(type="text", text=prompt_text))]
+
+
+# ── Cross-Intelligence Workflow Prompts ───────────────────────────────────────
+
+@mcp.prompt()
+async def vulnerability_triage_briefing(
+    cve_list: Annotated[str, Field(
+        description="Comma-separated CVE IDs from a vulnerability scan (e.g. 'CVE-2024-3400, CVE-2021-44228, CVE-2023-4966')"
+    )],
+) -> list[PromptMessage]:
+    """
+    Vulnerability Triage Briefing — batch risk scoring and prioritized patch plan.
+    Takes a list of CVEs from a vulnerability scan and produces a business-ready patch
+    prioritization report using composite risk scoring (CVSS + EPSS + KEV + vendor advisories).
+    Ideal for: vulnerability management teams after scan results, Patch Tuesday planning.
+    """
+    prompt_text = (
+        f"**Vulnerability Triage Briefing**\n\n"
+        f"Our vulnerability scanner has flagged the following CVEs:\n"
+        f"`{cve_list}`\n\n"
+        f"Please produce a prioritized patch plan:\n"
+        f"1. Use `batch_enrich_cves` with the full list of CVE IDs to get composite risk scores for all CVEs at once.\n"
+        f"2. For the top 3 highest-risk CVEs, use `correlate_threat` with input_type='cve' to get full cross-source intelligence (MITRE techniques, D3FEND defenses, vendor advisories).\n"
+        f"3. Use `batch_vendor_check` to identify which CVEs already have vendor patch guidance available.\n"
+        f"4. Produce a structured triage report:\n"
+        f"   - **Priority 1 (Patch Immediately)**: CVEs with risk score >= 80 or in CISA KEV\n"
+        f"   - **Priority 2 (Patch within 7 days)**: CVEs with risk score 50-79\n"
+        f"   - **Priority 3 (Patch within 30 days)**: CVEs with risk score < 50\n"
+        f"   - For each CVE: risk score, CVSS, EPSS probability, KEV status, vendor advisory link\n"
+        f"   - Compensating controls from D3FEND for any CVEs that cannot be patched immediately\n"
+        f"5. Close with an executive summary: total CVEs, critical count, percentage with active exploitation, and estimated remediation effort."
+    )
+    return [PromptMessage(role="user", content=TextContent(type="text", text=prompt_text))]
+
+
+@mcp.prompt()
+async def morning_threat_briefing(
+    category: Annotated[str, Field(
+        description="Focus area: 'it' for IT security, 'ot' for industrial/ICS, 'ai' for AI/LLM security, or 'all' for everything"
+    )] = "all",
+) -> list[PromptMessage]:
+    """
+    Morning Threat Briefing — daily situational awareness for security leadership.
+    Generates an executive-ready daily threat intelligence digest covering new vulnerabilities,
+    active exploitations, vendor advisories, and ICS alerts.
+    Ideal for: CISOs, SOC leads, daily standup meetings.
+    """
+    cat_filter = None if category == "all" else category
+    cat_label = f" ({category.upper()})" if category != "all" else ""
+    cat_arg = f' with category="{cat_filter}"' if cat_filter else ""
+
+    prompt_text = (
+        f"**Daily Threat Intelligence Briefing{cat_label}**\n\n"
+        f"Please compile today's threat landscape briefing:\n\n"
+        f"1. Use `get_threat_landscape`{cat_arg} to pull the current threat landscape snapshot.\n"
+        f"2. From the results, identify the top 3 most critical items that require immediate attention.\n"
+        f"3. For any CISA KEV additions from the last 7 days, use `get_risk_card` to assess their real-world risk.\n"
+        f"4. For the highest-risk vendor advisory, use `correlate_threat` to map it to MITRE techniques and D3FEND countermeasures.\n"
+        f"5. Produce a concise executive briefing (suitable for a 5-minute standup):\n"
+        f"   - **Headline**: One-sentence summary of the most critical development\n"
+        f"   - **New Active Threats**: KEV additions with risk scores\n"
+        f"   - **Vendor Patches**: Key advisories requiring action\n"
+        f"   - **Action Items**: Specific steps for the security team today\n"
+        f"   - **Trend Watch**: Any emerging patterns or campaigns to monitor"
     )
     return [PromptMessage(role="user", content=TextContent(type="text", text=prompt_text))]
 
